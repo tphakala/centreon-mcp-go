@@ -155,8 +155,3 @@ func commonListHandler[T any](
 	res, anyVal := jsonResult(resp)
 	return res, anyVal, nil
 }
-
-// Stub register functions — replaced by real implementations.
-func RegisterNotificationTools(_ *mcp.Server, _ *centreon.Client, _ *slog.Logger)    {}
-func RegisterStatusTools(_ *mcp.Server, _ *centreon.Client, _ *slog.Logger)          {}
-func RegisterConnectionTools(_ *mcp.Server, _ *centreon.Client, _ *slog.Logger)      {}
