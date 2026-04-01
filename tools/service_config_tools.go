@@ -78,10 +78,14 @@ func RegisterServiceConfigTools(s *mcp.Server, client *centreon.Client, logger *
 
 // CreateServiceInput is the input for the centreon_service_create tool.
 type CreateServiceInput struct {
-	HostID         int    `json:"hostID"                  jsonschema:"Host ID"`
-	Name           string `json:"name"                    jsonschema:"Service name"`
-	Alias          string `json:"alias,omitempty"         jsonschema:"Service alias"`
-	CheckCommandID int    `json:"checkCommandID,omitempty" jsonschema:"Check command ID"`
+	HostID            int          `json:"hostID"                       jsonschema:"Host ID"`
+	Name              string       `json:"name"                         jsonschema:"Service name"`
+	Alias             string       `json:"alias,omitempty"              jsonschema:"Service alias"`
+	CheckCommandID    int          `json:"checkCommandID,omitempty"     jsonschema:"Check command ID"`
+	ServiceTemplateID int          `json:"serviceTemplateID,omitempty"  jsonschema:"Service template ID to inherit config from"`
+	ServiceGroups     []int        `json:"serviceGroups,omitempty"      jsonschema:"Service group IDs"`
+	ServiceCategories []int        `json:"serviceCategories,omitempty"  jsonschema:"Service category IDs"`
+	Macros            []MacroInput `json:"macros,omitempty"             jsonschema:"Custom macros"`
 }
 
 // UpdateServiceInput is the input for the centreon_service_update tool.
@@ -132,11 +136,21 @@ func serviceGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 func serviceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceInput) (*mcp.CallToolResult, any, error) {
 		logger.Info("centreon_service_create", "name", in.Name, "hostID", in.HostID)
+		macros := make([]centreon.Macro, 0, len(in.Macros))
+		for _, m := range in.Macros {
+			macros = append(macros, centreon.Macro{
+				Name: m.Name, Value: m.Value, IsPassword: m.IsPassword, Description: m.Description,
+			})
+		}
 		id, err := client.Services.Create(ctx, &centreon.CreateServiceRequest{
-			HostID:         in.HostID,
-			Name:           in.Name,
-			Alias:          in.Alias,
-			CheckCommandID: in.CheckCommandID,
+			HostID:            in.HostID,
+			Name:              in.Name,
+			Alias:             in.Alias,
+			CheckCommandID:    in.CheckCommandID,
+			ServiceTemplateID: in.ServiceTemplateID,
+			ServiceGroups:     in.ServiceGroups,
+			ServiceCategories: in.ServiceCategories,
+			Macros:            macros,
 		})
 		if err != nil {
 			logger.Error("failed: centreon_service_create", "error", err, "name", in.Name)

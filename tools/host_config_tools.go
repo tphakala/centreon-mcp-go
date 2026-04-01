@@ -76,6 +76,14 @@ func RegisterHostConfigTools(s *mcp.Server, client *centreon.Client, logger *slo
 	}, hostTemplateListHandler(client, logger))
 }
 
+// MacroInput represents a custom macro.
+type MacroInput struct {
+	Name        string `json:"name"                    jsonschema:"Macro name"`
+	Value       string `json:"value,omitempty"         jsonschema:"Macro value"`
+	IsPassword  bool   `json:"isPassword,omitempty"    jsonschema:"Whether the value is a password"`
+	Description string `json:"description,omitempty"   jsonschema:"Macro description"`
+}
+
 // CreateHostInput is the input for the centreon_host_create tool.
 type CreateHostInput struct {
 	MonitoringServerID int    `json:"monitoringServerID"         jsonschema:"Monitoring server ID"`
@@ -83,6 +91,10 @@ type CreateHostInput struct {
 	Address            string `json:"address"                    jsonschema:"Host IP address or FQDN"`
 	Alias              string `json:"alias,omitempty"            jsonschema:"Host alias"`
 	CheckCommandID     int    `json:"checkCommandID,omitempty"   jsonschema:"Check command ID"`
+	Templates          []int  `json:"templates,omitempty"        jsonschema:"Host template IDs to inherit services and config from"`
+	Groups             []int  `json:"groups,omitempty"           jsonschema:"Host group IDs"`
+	Categories         []int  `json:"categories,omitempty"       jsonschema:"Host category IDs"`
+	Macros             []MacroInput `json:"macros,omitempty"     jsonschema:"Custom macros"`
 }
 
 // UpdateHostInput is the input for the centreon_host_update tool.
@@ -135,12 +147,22 @@ func hostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx conte
 func hostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateHostInput) (*mcp.CallToolResult, any, error) {
 		logger.Info("centreon_host_create", "name", in.Name, "address", in.Address)
+		macros := make([]centreon.Macro, 0, len(in.Macros))
+		for _, m := range in.Macros {
+			macros = append(macros, centreon.Macro{
+				Name: m.Name, Value: m.Value, IsPassword: m.IsPassword, Description: m.Description,
+			})
+		}
 		id, err := client.Hosts.Create(ctx, &centreon.CreateHostRequest{
 			MonitoringServerID: in.MonitoringServerID,
 			Name:               in.Name,
 			Address:            in.Address,
 			Alias:              in.Alias,
 			CheckCommandID:     in.CheckCommandID,
+			Templates:          in.Templates,
+			Groups:             in.Groups,
+			Categories:         in.Categories,
+			Macros:             macros,
 		})
 		if err != nil {
 			logger.Error("failed: centreon_host_create", "error", err, "name", in.Name)

@@ -239,6 +239,11 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 			logger.Error("gateway: authentication failed", "host", host, "error", err)
 			return nil
 		}
+		// Cache the token for subsequent requests
+		if tok := client.Token(); tok != "" {
+			tokenCache.Set(host, username, tok)
+			logger.Debug("gateway: cached token after login", "host", host)
+		}
 	}
 
 	logger.Debug("gateway: created per-request client", "host", host)
