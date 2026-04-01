@@ -25,6 +25,7 @@ func RegisterStatusTools(s *mcp.Server, client *centreon.Client, logger *slog.Lo
 
 func platformStatusHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_platform_status")
 		logger.Debug("centreon_platform_status")
 
 		hosts, err := client.MonitoringHosts.StatusCounts(ctx)

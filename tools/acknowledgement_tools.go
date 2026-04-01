@@ -79,6 +79,7 @@ func acknowledgementListHandler(client *centreon.Client, logger *slog.Logger) fu
 
 func acknowledgementGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_get")
 		logger.Debug("centreon_acknowledgement_get", "id", in.ID)
 		ack, err := client.Acknowledgements.Get(ctx, in.ID)
 		if err != nil {
@@ -93,6 +94,7 @@ func acknowledgementGetHandler(client *centreon.Client, logger *slog.Logger) fun
 
 func acknowledgementHostListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_host_list")
 		logger.Debug("centreon_acknowledgement_host_list", "hostID", in.HostID, "page", in.Page, "limit", in.Limit, "search", in.Search)
 		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
 		opts := buildListOptions(listIn)
@@ -109,6 +111,7 @@ func acknowledgementHostListHandler(client *centreon.Client, logger *slog.Logger
 
 func acknowledgementServiceListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostServiceListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostServiceListInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_service_list")
 		logger.Debug("centreon_acknowledgement_service_list", "hostID", in.HostID, "serviceID", in.ServiceID, "page", in.Page, "limit", in.Limit, "search", in.Search)
 		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
 		opts := buildListOptions(listIn)
@@ -125,6 +128,7 @@ func acknowledgementServiceListHandler(client *centreon.Client, logger *slog.Log
 
 func acknowledgementHostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostAcknowledgementInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateHostAcknowledgementInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_host_create")
 		logger.Info("centreon_acknowledgement_host_create", "hostID", in.HostID)
 		ackReq := &centreon.CreateAcknowledgementRequest{
 			Comment:             in.Comment,
@@ -145,6 +149,7 @@ func acknowledgementHostCreateHandler(client *centreon.Client, logger *slog.Logg
 
 func acknowledgementServiceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceAcknowledgementInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceAcknowledgementInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_service_create")
 		logger.Info("centreon_acknowledgement_service_create", "hostID", in.HostID, "serviceID", in.ServiceID)
 		ackReq := &centreon.CreateAcknowledgementRequest{
 			Comment:             in.Comment,
@@ -164,6 +169,7 @@ func acknowledgementServiceCreateHandler(client *centreon.Client, logger *slog.L
 
 func acknowledgementHostCancelHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_host_cancel")
 		logger.Info("centreon_acknowledgement_host_cancel", "hostID", in.HostID)
 		if err := client.Acknowledgements.CancelForHost(ctx, in.HostID); err != nil {
 			logger.Error("failed: centreon_acknowledgement_host_cancel", "error", err, "hostID", in.HostID)
@@ -177,6 +183,7 @@ func acknowledgementHostCancelHandler(client *centreon.Client, logger *slog.Logg
 
 func acknowledgementServiceCancelHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostServiceInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostServiceInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_service_cancel")
 		logger.Info("centreon_acknowledgement_service_cancel", "hostID", in.HostID, "serviceID", in.ServiceID)
 		if err := client.Acknowledgements.CancelForService(ctx, in.HostID, in.ServiceID); err != nil {
 			logger.Error("failed: centreon_acknowledgement_service_cancel", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)

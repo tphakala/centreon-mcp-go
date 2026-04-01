@@ -50,6 +50,7 @@ type BulkAcknowledgeInput struct {
 
 func bulkAcknowledgeHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in BulkAcknowledgeInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in BulkAcknowledgeInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_resource_acknowledge")
 		logger.Info("centreon_resource_acknowledge", "type", in.Type, "id", in.ID, "comment", in.Comment)
 		ref := centreon.ResourceRef{Type: in.Type, ID: in.ID}
 		if in.ParentID != 0 {
@@ -86,6 +87,7 @@ type BulkDowntimeInput struct {
 
 func bulkDowntimeHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in BulkDowntimeInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in BulkDowntimeInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_resource_downtime")
 		logger.Info("centreon_resource_downtime", "type", in.Type, "id", in.ID, "start", in.StartTime, "end", in.EndTime)
 		startTime, err := time.Parse(time.RFC3339, in.StartTime)
 		if err != nil {
@@ -132,6 +134,7 @@ type BulkCheckInput struct {
 
 func bulkCheckHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in BulkCheckInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in BulkCheckInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_resource_check")
 		logger.Info("centreon_resource_check", "type", in.Type, "id", in.ID)
 		ref := centreon.ResourceRef{Type: in.Type, ID: in.ID}
 		if in.ParentID != 0 {
@@ -162,6 +165,7 @@ type BulkSubmitInput struct {
 
 func bulkSubmitHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in BulkSubmitInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in BulkSubmitInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_resource_submit")
 		logger.Info("centreon_resource_submit", "type", in.Type, "id", in.ID, "status", in.Status)
 		var parent *centreon.ResourceRef
 		if in.ParentID != 0 {
@@ -199,6 +203,7 @@ type BulkCommentInput struct {
 
 func bulkCommentHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in BulkCommentInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in BulkCommentInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_resource_comment")
 		logger.Info("centreon_resource_comment", "type", in.Type, "id", in.ID, "comment", in.Comment)
 		ref := centreon.ResourceRef{Type: in.Type, ID: in.ID}
 		if in.ParentID != 0 {

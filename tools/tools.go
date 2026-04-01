@@ -155,6 +155,7 @@ func commonListHandler[T any](
 	in ListInput,
 	requester ListRequester[T],
 ) (*mcp.CallToolResult, any, error) {
+	ctx = centreon.WithToolName(ctx, toolName)
 	logger.Debug(toolName, "page", in.Page, "limit", in.Limit, "search", in.Search)
 
 	opts := buildListOptions(in)

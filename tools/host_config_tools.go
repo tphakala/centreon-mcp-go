@@ -132,6 +132,7 @@ func hostListHandler(client *centreon.Client, logger *slog.Logger) func(ctx cont
 
 func hostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_get")
 		logger.Debug("centreon_host_get", "id", in.ID)
 		host, err := client.Hosts.GetByID(ctx, in.ID)
 		if err != nil {
@@ -146,6 +147,7 @@ func hostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx conte
 
 func hostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateHostInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_create")
 		logger.Info("centreon_host_create", "name", in.Name, "address", in.Address)
 		macros := make([]centreon.Macro, 0, len(in.Macros))
 		for _, m := range in.Macros {
@@ -176,6 +178,7 @@ func hostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 
 func hostUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateHostInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in UpdateHostInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_update")
 		logger.Info("centreon_host_update", "id", in.ID)
 		req := centreon.UpdateHostRequest{
 			Name:                in.Name,
@@ -200,6 +203,7 @@ func hostUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 
 func hostDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_delete")
 		logger.Info("centreon_host_delete", "id", in.ID)
 		if err := client.Hosts.Delete(ctx, in.ID); err != nil {
 			logger.Error("failed: centreon_host_delete", "error", err, "id", in.ID)
@@ -219,6 +223,7 @@ func hostGroupListHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 
 func hostGroupGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_group_get")
 		logger.Debug("centreon_host_group_get", "id", in.ID)
 		hg, err := client.HostGroups.Get(ctx, in.ID)
 		if err != nil {
@@ -233,6 +238,7 @@ func hostGroupGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx 
 
 func hostGroupCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostGroupInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateHostGroupInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_group_create")
 		logger.Info("centreon_host_group_create", "name", in.Name)
 		id, err := client.HostGroups.Create(ctx, centreon.CreateHostGroupRequest{
 			Name:  in.Name,
@@ -250,6 +256,7 @@ func hostGroupCreateHandler(client *centreon.Client, logger *slog.Logger) func(c
 
 func hostGroupUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateHostGroupInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in UpdateHostGroupInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_group_update")
 		logger.Info("centreon_host_group_update", "id", in.ID)
 		if err := client.HostGroups.Update(ctx, in.ID, centreon.UpdateHostGroupRequest{
 			Name:  in.Name,
@@ -266,6 +273,7 @@ func hostGroupUpdateHandler(client *centreon.Client, logger *slog.Logger) func(c
 
 func hostGroupDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_group_delete")
 		logger.Info("centreon_host_group_delete", "id", in.ID)
 		if err := client.HostGroups.Delete(ctx, in.ID); err != nil {
 			logger.Error("failed: centreon_host_group_delete", "error", err, "id", in.ID)

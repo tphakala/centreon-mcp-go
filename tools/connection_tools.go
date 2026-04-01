@@ -18,6 +18,7 @@ func RegisterConnectionTools(s *mcp.Server, client *centreon.Client, logger *slo
 
 func connectionTestHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_connection_test")
 		logger.Debug("centreon_connection_test")
 		_, err := client.MonitoringHosts.StatusCounts(ctx)
 		if err != nil {

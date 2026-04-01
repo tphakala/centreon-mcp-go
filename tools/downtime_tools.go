@@ -87,6 +87,7 @@ func downtimeListHandler(client *centreon.Client, logger *slog.Logger) func(ctx 
 
 func downtimeGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_downtime_get")
 		logger.Debug("centreon_downtime_get", "id", in.ID)
 		downtime, err := client.Downtimes.Get(ctx, in.ID)
 		if err != nil {
@@ -101,6 +102,7 @@ func downtimeGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx c
 
 func downtimeCancelHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_downtime_cancel")
 		logger.Info("centreon_downtime_cancel", "id", in.ID)
 		if err := client.Downtimes.Cancel(ctx, in.ID); err != nil {
 			logger.Error("failed: centreon_downtime_cancel", "error", err, "id", in.ID)
@@ -114,6 +116,7 @@ func downtimeCancelHandler(client *centreon.Client, logger *slog.Logger) func(ct
 
 func downtimeHostListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_downtime_host_list")
 		logger.Debug("centreon_downtime_host_list", "hostID", in.HostID, "page", in.Page, "limit", in.Limit, "search", in.Search)
 		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
 		opts := buildListOptions(listIn)
@@ -130,6 +133,7 @@ func downtimeHostListHandler(client *centreon.Client, logger *slog.Logger) func(
 
 func downtimeServiceListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostServiceListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostServiceListInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_downtime_service_list")
 		logger.Debug("centreon_downtime_service_list", "hostID", in.HostID, "serviceID", in.ServiceID, "page", in.Page, "limit", in.Limit, "search", in.Search)
 		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
 		opts := buildListOptions(listIn)
@@ -146,6 +150,7 @@ func downtimeServiceListHandler(client *centreon.Client, logger *slog.Logger) fu
 
 func downtimeHostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostDowntimeInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateHostDowntimeInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_downtime_host_create")
 		logger.Info("centreon_downtime_host_create", "hostID", in.HostID, "start", in.StartTime, "end", in.EndTime)
 		startTime, err := time.Parse(time.RFC3339, in.StartTime)
 		if err != nil {
@@ -181,6 +186,7 @@ func downtimeHostCreateHandler(client *centreon.Client, logger *slog.Logger) fun
 
 func downtimeServiceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceDowntimeInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceDowntimeInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_downtime_service_create")
 		logger.Info("centreon_downtime_service_create", "hostID", in.HostID, "serviceID", in.ServiceID, "start", in.StartTime, "end", in.EndTime)
 		startTime, err := time.Parse(time.RFC3339, in.StartTime)
 		if err != nil {
@@ -217,6 +223,7 @@ func downtimeServiceCreateHandler(client *centreon.Client, logger *slog.Logger) 
 
 func downtimeHostCancelHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_downtime_host_cancel")
 		logger.Info("centreon_downtime_host_cancel", "hostID", in.HostID)
 		if err := client.Downtimes.CancelForHost(ctx, in.HostID); err != nil {
 			logger.Error("failed: centreon_downtime_host_cancel", "error", err, "hostID", in.HostID)
@@ -230,6 +237,7 @@ func downtimeHostCancelHandler(client *centreon.Client, logger *slog.Logger) fun
 
 func downtimeServiceCancelHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostServiceInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostServiceInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_downtime_service_cancel")
 		logger.Info("centreon_downtime_service_cancel", "hostID", in.HostID, "serviceID", in.ServiceID)
 		if err := client.Downtimes.CancelForService(ctx, in.HostID, in.ServiceID); err != nil {
 			logger.Error("failed: centreon_downtime_service_cancel", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)

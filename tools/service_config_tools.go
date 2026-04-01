@@ -121,6 +121,7 @@ func serviceListHandler(client *centreon.Client, logger *slog.Logger) func(ctx c
 
 func serviceGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_get")
 		logger.Debug("centreon_service_get", "id", in.ID)
 		svc, err := client.Services.GetByID(ctx, in.ID)
 		if err != nil {
@@ -135,6 +136,7 @@ func serviceGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 
 func serviceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_create")
 		logger.Info("centreon_service_create", "name", in.Name, "hostID", in.HostID)
 		macros := make([]centreon.Macro, 0, len(in.Macros))
 		for _, m := range in.Macros {
@@ -164,6 +166,7 @@ func serviceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 
 func serviceUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateServiceInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in UpdateServiceInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_update")
 		logger.Info("centreon_service_update", "id", in.ID)
 		req := centreon.UpdateServiceRequest{
 			Name:                in.Name,
@@ -187,6 +190,7 @@ func serviceUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 
 func serviceDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_delete")
 		logger.Info("centreon_service_delete", "id", in.ID)
 		if err := client.Services.Delete(ctx, in.ID); err != nil {
 			logger.Error("failed: centreon_service_delete", "error", err, "id", in.ID)
@@ -206,6 +210,7 @@ func serviceGroupListHandler(client *centreon.Client, logger *slog.Logger) func(
 
 func serviceGroupCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceGroupInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceGroupInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_group_create")
 		logger.Info("centreon_service_group_create", "name", in.Name)
 		id, err := client.ServiceGroups.Create(ctx, centreon.CreateServiceGroupRequest{
 			Name:  in.Name,
@@ -223,6 +228,7 @@ func serviceGroupCreateHandler(client *centreon.Client, logger *slog.Logger) fun
 
 func serviceGroupDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_group_delete")
 		logger.Info("centreon_service_group_delete", "id", in.ID)
 		if err := client.ServiceGroups.Delete(ctx, in.ID); err != nil {
 			logger.Error("failed: centreon_service_group_delete", "error", err, "id", in.ID)
@@ -242,6 +248,7 @@ func serviceCategoryListHandler(client *centreon.Client, logger *slog.Logger) fu
 
 func serviceCategoryCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceCategoryInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceCategoryInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_category_create")
 		logger.Info("centreon_service_category_create", "name", in.Name)
 		id, err := client.ServiceCategories.Create(ctx, centreon.CreateServiceCategoryRequest{
 			Name:  in.Name,
@@ -259,6 +266,7 @@ func serviceCategoryCreateHandler(client *centreon.Client, logger *slog.Logger) 
 
 func serviceCategoryDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_category_delete")
 		logger.Info("centreon_service_category_delete", "id", in.ID)
 		if err := client.ServiceCategories.Delete(ctx, in.ID); err != nil {
 			logger.Error("failed: centreon_service_category_delete", "error", err, "id", in.ID)

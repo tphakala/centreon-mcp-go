@@ -23,6 +23,7 @@ func RegisterNotificationTools(s *mcp.Server, client *centreon.Client, logger *s
 
 func notificationPolicyHostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_notification_policy_host_get")
 		logger.Debug("centreon_notification_policy_host_get", "hostID", in.HostID)
 		np, err := client.NotificationPolicies.GetForHost(ctx, in.HostID)
 		if err != nil {
@@ -37,6 +38,7 @@ func notificationPolicyHostGetHandler(client *centreon.Client, logger *slog.Logg
 
 func notificationPolicyServiceGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostServiceInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostServiceInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_notification_policy_service_get")
 		logger.Debug("centreon_notification_policy_service_get", "hostID", in.HostID, "serviceID", in.ServiceID)
 		np, err := client.NotificationPolicies.GetForService(ctx, in.HostID, in.ServiceID)
 		if err != nil {

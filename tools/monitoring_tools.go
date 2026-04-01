@@ -69,6 +69,7 @@ func monitoringHostListHandler(client *centreon.Client, logger *slog.Logger) fun
 
 func monitoringHostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_monitoring_host_get")
 		logger.Debug("centreon_monitoring_host_get", "id", in.ID)
 		host, err := client.MonitoringHosts.Get(ctx, in.ID)
 		if err != nil {
@@ -83,6 +84,7 @@ func monitoringHostGetHandler(client *centreon.Client, logger *slog.Logger) func
 
 func monitoringHostServicesHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_monitoring_host_services")
 		logger.Debug("centreon_monitoring_host_services", "hostID", in.HostID, "page", in.Page, "limit", in.Limit)
 		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
 		opts := buildListOptions(listIn)
@@ -99,6 +101,7 @@ func monitoringHostServicesHandler(client *centreon.Client, logger *slog.Logger)
 
 func monitoringHostTimelineHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_monitoring_host_timeline")
 		logger.Debug("centreon_monitoring_host_timeline", "hostID", in.HostID, "page", in.Page, "limit", in.Limit)
 		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
 		opts := buildListOptions(listIn)
@@ -115,6 +118,7 @@ func monitoringHostTimelineHandler(client *centreon.Client, logger *slog.Logger)
 
 func monitoringHostStatusCountsHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_monitoring_host_status_counts")
 		logger.Debug("centreon_monitoring_host_status_counts")
 		counts, err := client.MonitoringHosts.StatusCounts(ctx)
 		if err != nil {
@@ -135,6 +139,7 @@ func monitoringServiceListHandler(client *centreon.Client, logger *slog.Logger) 
 
 func monitoringServiceStatusCountsHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_monitoring_service_status_counts")
 		logger.Debug("centreon_monitoring_service_status_counts")
 		counts, err := client.MonitoringServices.StatusCounts(ctx)
 		if err != nil {
@@ -155,6 +160,7 @@ func monitoringResourceListHandler(client *centreon.Client, logger *slog.Logger)
 
 func monitoringResourceHostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_monitoring_resource_host_get")
 		logger.Debug("centreon_monitoring_resource_host_get", "id", in.ID)
 		host, err := client.Monitoring.GetHost(ctx, in.ID)
 		if err != nil {
@@ -169,6 +175,7 @@ func monitoringResourceHostGetHandler(client *centreon.Client, logger *slog.Logg
 
 func monitoringResourceServiceGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostServiceInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostServiceInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_monitoring_resource_service_get")
 		logger.Debug("centreon_monitoring_resource_service_get", "hostID", in.HostID, "serviceID", in.ServiceID)
 		svc, err := client.Monitoring.GetService(ctx, in.HostID, in.ServiceID)
 		if err != nil {

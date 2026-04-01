@@ -63,6 +63,7 @@ func userListHandler(client *centreon.Client, logger *slog.Logger) func(ctx cont
 
 func userUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateUserInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in UpdateUserInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_user_update")
 		logger.Info("centreon_user_update", "id", in.ID)
 		req := centreon.UpdateUserRequest{
 			Name:  in.Name,
@@ -99,6 +100,7 @@ func userFilterListHandler(client *centreon.Client, logger *slog.Logger) func(ct
 
 func userFilterCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateUserFilterInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateUserFilterInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_user_filter_create")
 		logger.Info("centreon_user_filter_create", "name", in.Name)
 		id, err := client.UserFilters.Create(ctx, centreon.CreateUserFilterRequest{
 			Name:     in.Name,

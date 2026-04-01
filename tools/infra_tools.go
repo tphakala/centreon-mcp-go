@@ -62,6 +62,7 @@ func timePeriodListHandler(client *centreon.Client, logger *slog.Logger) func(ct
 
 func timePeriodGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_time_period_get")
 		logger.Debug("centreon_time_period_get", "id", in.ID)
 		tp, err := client.TimePeriods.Get(ctx, in.ID)
 		if err != nil {
@@ -76,6 +77,7 @@ func timePeriodGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 
 func timePeriodCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateTimePeriodInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateTimePeriodInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_time_period_create")
 		logger.Info("centreon_time_period_create", "name", in.Name)
 		id, err := client.TimePeriods.Create(ctx, centreon.CreateTimePeriodRequest{
 			Name:  in.Name,
