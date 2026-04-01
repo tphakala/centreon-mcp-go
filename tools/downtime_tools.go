@@ -157,6 +157,10 @@ func downtimeHostCreateHandler(client *centreon.Client, logger *slog.Logger) fun
 			res, anyVal := errorResult("invalid endTime %q: must be RFC3339 format: %v", in.EndTime, err)
 			return res, anyVal, nil
 		}
+		if !endTime.After(startTime) {
+			res, anyVal := errorResult("endTime must be after startTime")
+			return res, anyVal, nil
+		}
 		downtimeReq := &centreon.CreateDowntimeRequest{
 			Comment:      in.Comment,
 			StartTime:    startTime,
@@ -180,12 +184,18 @@ func downtimeServiceCreateHandler(client *centreon.Client, logger *slog.Logger) 
 		logger.Info("centreon_downtime_service_create", "hostID", in.HostID, "serviceID", in.ServiceID, "start", in.StartTime, "end", in.EndTime)
 		startTime, err := time.Parse(time.RFC3339, in.StartTime)
 		if err != nil {
+			logger.Error("failed: centreon_downtime_service_create", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID, "field", "startTime")
 			res, anyVal := errorResult("invalid startTime %q: must be RFC3339 format: %v", in.StartTime, err)
 			return res, anyVal, nil
 		}
 		endTime, err := time.Parse(time.RFC3339, in.EndTime)
 		if err != nil {
+			logger.Error("failed: centreon_downtime_service_create", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID, "field", "endTime")
 			res, anyVal := errorResult("invalid endTime %q: must be RFC3339 format: %v", in.EndTime, err)
+			return res, anyVal, nil
+		}
+		if !endTime.After(startTime) {
+			res, anyVal := errorResult("endTime must be after startTime")
 			return res, anyVal, nil
 		}
 		downtimeReq := &centreon.CreateDowntimeRequest{

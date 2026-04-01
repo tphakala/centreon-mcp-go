@@ -55,9 +55,13 @@ func LoadConfig() (Config, error) {
 	portStr := os.Getenv("MCP_HTTP_PORT")
 	if portStr != "" {
 		port, err := strconv.Atoi(portStr)
-		if err == nil {
-			cfg.HTTPPort = port
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid MCP_HTTP_PORT value %q: %w", portStr, err)
 		}
+		if port < 1 || port > 65535 {
+			return Config{}, fmt.Errorf("MCP_HTTP_PORT must be between 1 and 65535, got %d", port)
+		}
+		cfg.HTTPPort = port
 	}
 	if cfg.HTTPPort == 0 {
 		cfg.HTTPPort = 8080
@@ -66,9 +70,10 @@ func LoadConfig() (Config, error) {
 	selfSigned := os.Getenv("CENTREON_ALLOW_SELF_SIGNED")
 	if selfSigned != "" {
 		v, err := strconv.ParseBool(selfSigned)
-		if err == nil {
-			cfg.AllowSelfSigned = v
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid CENTREON_ALLOW_SELF_SIGNED value %q: expected true/false", selfSigned)
 		}
+		cfg.AllowSelfSigned = v
 	}
 
 	return cfg, nil
