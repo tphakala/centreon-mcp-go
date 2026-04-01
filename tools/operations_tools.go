@@ -97,6 +97,10 @@ func bulkDowntimeHandler(client *centreon.Client, logger *slog.Logger) func(ctx 
 			res, anyVal := errorResult("invalid endTime %q: must be RFC3339 format: %v", in.EndTime, err)
 			return res, anyVal, nil
 		}
+		if !endTime.After(startTime) {
+			res, anyVal := errorResult("endTime must be after startTime")
+			return res, anyVal, nil
+		}
 		ref := centreon.ResourceRef{Type: in.Type, ID: in.ID}
 		if in.ParentID != 0 {
 			ref.Parent = &centreon.ResourceRef{Type: "host", ID: in.ParentID}

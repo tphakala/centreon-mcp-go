@@ -55,6 +55,13 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	t.Setenv("CENTREON_HOST", "https://centreon.example.com")
 	t.Setenv("CENTREON_USERNAME", "admin")
 	t.Setenv("CENTREON_PASSWORD", "secret")
+	t.Setenv("CENTREON_TOKEN", "")
+	t.Setenv("CENTREON_ALLOW_SELF_SIGNED", "")
+	t.Setenv("MCP_TRANSPORT", "")
+	t.Setenv("MCP_HTTP_PORT", "")
+	t.Setenv("MCP_HTTP_HOST", "")
+	t.Setenv("AUTH_MODE", "")
+	t.Setenv("LOG_LEVEL", "")
 
 	cfg, err := LoadConfig()
 	if err != nil {
