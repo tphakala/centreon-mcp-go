@@ -40,8 +40,24 @@ func buildServer(client *centreon.Client, logger *slog.Logger) *mcp.Server {
 	return s
 }
 
+// selfSignedHTTPClient creates a reusable HTTP client that accepts self-signed certificates.
+// Called once at startup; the returned client is shared across all requests.
+func selfSignedHTTPClient() (*http.Client, error) {
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("unexpected default transport type")
+	}
+	transport := defaultTransport.Clone()
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested self-signed cert support
+	return &http.Client{
+		Timeout:   selfSignedTimeout,
+		Transport: transport,
+	}, nil
+}
+
 // newCentreonClient creates a centreon.Client with the given config.
-func newCentreonClient(host string, cfg *Config, logger *slog.Logger) (*centreon.Client, error) {
+// httpClient may be nil; if non-nil it is used for all HTTP requests (e.g. self-signed TLS).
+func newCentreonClient(host string, cfg *Config, logger *slog.Logger, httpClient *http.Client) (*centreon.Client, error) {
 	opts := []centreon.Option{}
 	if cfg.Token != "" {
 		opts = append(opts, centreon.WithAPIToken(cfg.Token))
@@ -51,17 +67,7 @@ func newCentreonClient(host string, cfg *Config, logger *slog.Logger) (*centreon
 	if logger != nil {
 		opts = append(opts, centreon.WithLogger(logger))
 	}
-	if cfg.AllowSelfSigned {
-		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			return nil, fmt.Errorf("unexpected default transport type")
-		}
-		transport := defaultTransport.Clone()
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested self-signed cert support
-		httpClient := &http.Client{
-			Timeout:   selfSignedTimeout,
-			Transport: transport,
-		}
+	if httpClient != nil {
 		opts = append(opts, centreon.WithHTTPClient(httpClient))
 	}
 	return centreon.NewClient(host, opts...)
@@ -71,19 +77,29 @@ func newCentreonClient(host string, cfg *Config, logger *slog.Logger) (*centreon
 func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	logger.Info("centreon-mcp-go starting", "version", version, "transport", cfg.Transport)
 
+	// Create self-signed HTTP client once, shared across all requests.
+	var httpClient *http.Client
+	if cfg.AllowSelfSigned {
+		var err error
+		httpClient, err = selfSignedHTTPClient()
+		if err != nil {
+			return fmt.Errorf("creating self-signed HTTP client: %w", err)
+		}
+	}
+
 	switch cfg.Transport {
 	case "stdio":
-		return runStdio(ctx, cfg, logger)
+		return runStdio(ctx, cfg, logger, httpClient)
 	case "http":
-		return runHTTP(ctx, cfg, logger)
+		return runHTTP(ctx, cfg, logger, httpClient)
 	default:
 		return fmt.Errorf("unknown transport %q: expected \"stdio\" or \"http\"", cfg.Transport)
 	}
 }
 
 // runStdio starts the MCP server on stdin/stdout.
-func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger) error {
-	client, err := newCentreonClient(cfg.Host, cfg, logger)
+func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *http.Client) error {
+	client, err := newCentreonClient(cfg.Host, cfg, logger, httpClient)
 	if err != nil {
 		return fmt.Errorf("creating centreon client: %w", err)
 	}
@@ -104,12 +120,12 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 }
 
 // runHTTP starts the MCP server over HTTP.
-func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
+func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *http.Client) error {
 	var sharedClient *centreon.Client
 	var tokenCache *TokenCache
 
 	if cfg.AuthMode == authModeEnv {
-		client, err := newCentreonClient(cfg.Host, cfg, logger)
+		client, err := newCentreonClient(cfg.Host, cfg, logger, httpClient)
 		if err != nil {
 			return fmt.Errorf("creating centreon client: %w", err)
 		}
@@ -128,7 +144,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 		if cfg.AuthMode == authModeEnv {
 			return buildServer(sharedClient, logger)
 		}
-		return gatewayServer(r, cfg, tokenCache, logger)
+		return gatewayServer(r, cfg, tokenCache, logger, httpClient)
 	}
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
@@ -178,7 +194,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 }
 
 // gatewayServer creates a per-request MCP server from gateway headers.
-func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger *slog.Logger) *mcp.Server {
+func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger *slog.Logger, httpClient *http.Client) *mcp.Server {
 	host := r.Header.Get("X-Centreon-Host")
 	username := r.Header.Get("X-Centreon-Username")
 	password := r.Header.Get("X-Centreon-Password")
@@ -210,7 +226,7 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		return nil
 	}
 
-	client, err := newCentreonClient(host, gwCfg, logger)
+	client, err := newCentreonClient(host, gwCfg, logger, httpClient)
 	if err != nil {
 		logger.Error("gateway: failed to create client", "host", host, "error", err)
 		return nil

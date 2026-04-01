@@ -46,14 +46,21 @@ func (c *TokenCache) Get(host, username string) (string, bool) {
 	return entry.token, true
 }
 
-// Set stores a token in the cache.
+// Set stores a token in the cache and sweeps expired entries.
 func (c *TokenCache) Set(host, username, token string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	now := time.Now()
+	for k, e := range c.entries {
+		if now.After(e.expires) {
+			delete(c.entries, k)
+		}
+	}
+
 	key := cacheKey(host, username)
 	c.entries[key] = tokenEntry{
 		token:   token,
-		expires: time.Now().Add(c.ttl),
+		expires: now.Add(c.ttl),
 	}
 }

@@ -48,6 +48,18 @@ func LoadConfig() (Config, error) {
 	cfg.LogLevel = envOr("LOG_LEVEL", "info")
 	cfg.AuthMode = envOr("AUTH_MODE", "env")
 
+	switch cfg.Transport {
+	case "stdio", "http":
+	default:
+		return Config{}, fmt.Errorf("invalid MCP_TRANSPORT value %q: expected stdio/http", cfg.Transport)
+	}
+
+	switch cfg.AuthMode {
+	case "env", "gateway":
+	default:
+		return Config{}, fmt.Errorf("invalid AUTH_MODE value %q: expected env/gateway", cfg.AuthMode)
+	}
+
 	if cfg.HTTPHost == "" {
 		cfg.HTTPHost = "0.0.0.0"
 	}
