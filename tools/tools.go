@@ -157,7 +157,6 @@ func commonListHandler[T any](
 }
 
 // Stub register functions — replaced by real implementations.
-func RegisterUserTools(_ *mcp.Server, _ *centreon.Client, _ *slog.Logger)            {}
 func RegisterNotificationTools(_ *mcp.Server, _ *centreon.Client, _ *slog.Logger)    {}
 func RegisterStatusTools(_ *mcp.Server, _ *centreon.Client, _ *slog.Logger)          {}
 func RegisterConnectionTools(_ *mcp.Server, _ *centreon.Client, _ *slog.Logger)      {}
