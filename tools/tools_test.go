@@ -31,7 +31,10 @@ func TestErrorResult(t *testing.T) {
 	if !res.IsError {
 		t.Error("expected IsError true")
 	}
-	tc := res.Content[0].(*mcp.TextContent)
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatal("expected TextContent")
+	}
 	if tc.Text != "fail: 42" {
 		t.Errorf("expected 'fail: 42', got %q", tc.Text)
 	}
@@ -46,7 +49,10 @@ func TestJsonResult(t *testing.T) {
 	if res.IsError {
 		t.Error("expected IsError false")
 	}
-	tc := res.Content[0].(*mcp.TextContent)
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatal("expected TextContent")
+	}
 	if tc.Text == "" {
 		t.Error("expected non-empty text")
 	}

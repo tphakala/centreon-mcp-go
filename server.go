@@ -20,11 +20,13 @@ import (
 const (
 	serverInstructions = "Centreon MCP Server. Provides tools for monitoring hosts and services, managing downtimes and acknowledgements, configuring hosts/services/groups/templates, and platform administration. Use centreon_monitoring_* for real-time status, centreon_resource_* for bulk operations, centreon_downtime_* and centreon_acknowledgement_* for per-resource management, and centreon_host_*/centreon_service_* for configuration."
 
-	readTimeout     = 30 * time.Second
-	writeTimeout    = 60 * time.Second
-	idleTimeout     = 120 * time.Second
-	shutdownTimeout = 15 * time.Second
-	tokenCacheTTL   = 50 * time.Minute
+	readTimeout       = 30 * time.Second
+	writeTimeout      = 60 * time.Second
+	idleTimeout       = 120 * time.Second
+	shutdownTimeout   = 15 * time.Second
+	tokenCacheTTL     = 50 * time.Minute
+	selfSignedTimeout = 30 * time.Second
+	authModeEnv       = "env"
 )
 
 // buildServer creates an MCP server with all tools registered.
@@ -50,7 +52,7 @@ func newCentreonClient(host string, cfg *Config, logger *slog.Logger) (*centreon
 	}
 	if cfg.AllowSelfSigned {
 		httpClient := &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: selfSignedTimeout,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // user-requested self-signed cert support
 			},
@@ -101,7 +103,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	var sharedClient *centreon.Client
 	var tokenCache *TokenCache
 
-	if cfg.AuthMode == "env" {
+	if cfg.AuthMode == authModeEnv {
 		client, err := newCentreonClient(cfg.Host, cfg, logger)
 		if err != nil {
 			return fmt.Errorf("creating centreon client: %w", err)
@@ -118,62 +120,10 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	}
 
 	getServer := func(r *http.Request) *mcp.Server {
-		if cfg.AuthMode == "env" {
+		if cfg.AuthMode == authModeEnv {
 			return buildServer(sharedClient, logger)
 		}
-
-		// Gateway mode: extract credentials from request headers.
-		host := r.Header.Get("X-Centreon-Host")
-		username := r.Header.Get("X-Centreon-Username")
-		password := r.Header.Get("X-Centreon-Password")
-		token := r.Header.Get("X-Centreon-Token")
-
-		if host == "" {
-			logger.Error("gateway: missing X-Centreon-Host header")
-			return nil
-		}
-
-		gwCfg := &Config{
-			Host:            host,
-			AllowSelfSigned: cfg.AllowSelfSigned,
-		}
-
-		if token != "" {
-			gwCfg.Token = token
-		} else if username != "" && password != "" {
-			// Check token cache first
-			if cached, ok := tokenCache.Get(host, username); ok {
-				logger.Debug("gateway: using cached token", "host", host)
-				gwCfg.Token = cached
-			} else {
-				gwCfg.Username = username
-				gwCfg.Password = password
-			}
-		} else {
-			logger.Error("gateway: missing credentials", "host", host)
-			return nil
-		}
-
-		client, err := newCentreonClient(host, gwCfg, logger)
-		if err != nil {
-			logger.Error("gateway: failed to create client", "host", host, "error", err)
-			return nil
-		}
-
-		// Login and cache token for session auth (no cached token)
-		if gwCfg.Token == "" {
-			if err := client.Login(r.Context()); err != nil {
-				logger.Error("gateway: authentication failed", "host", host, "error", err)
-				return nil
-			}
-			// We can't easily extract the token from the client, so subsequent
-			// requests with the same credentials will re-login until we add
-			// a Token() accessor to centreon-go-client.
-			// TODO: Add Token() method to centreon-go-client for token caching.
-		}
-
-		logger.Debug("gateway: created per-request client", "host", host)
-		return buildServer(client, logger)
+		return gatewayServer(r, cfg, tokenCache, logger)
 	}
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
@@ -219,4 +169,54 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	} else {
 		return err
 	}
+}
+
+// gatewayServer creates a per-request MCP server from gateway headers.
+func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger *slog.Logger) *mcp.Server {
+	host := r.Header.Get("X-Centreon-Host")
+	username := r.Header.Get("X-Centreon-Username")
+	password := r.Header.Get("X-Centreon-Password")
+	token := r.Header.Get("X-Centreon-Token")
+
+	if host == "" {
+		logger.Error("gateway: missing X-Centreon-Host header")
+		return nil
+	}
+
+	gwCfg := &Config{
+		Host:            host,
+		AllowSelfSigned: cfg.AllowSelfSigned,
+	}
+
+	switch {
+	case token != "":
+		gwCfg.Token = token
+	case username != "" && password != "":
+		if cached, ok := tokenCache.Get(host, username); ok {
+			logger.Debug("gateway: using cached token", "host", host)
+			gwCfg.Token = cached
+		} else {
+			gwCfg.Username = username
+			gwCfg.Password = password
+		}
+	default:
+		logger.Error("gateway: missing credentials", "host", host)
+		return nil
+	}
+
+	client, err := newCentreonClient(host, gwCfg, logger)
+	if err != nil {
+		logger.Error("gateway: failed to create client", "host", host, "error", err)
+		return nil
+	}
+
+	if gwCfg.Token == "" {
+		if err := client.Login(r.Context()); err != nil {
+			logger.Error("gateway: authentication failed", "host", host, "error", err)
+			return nil
+		}
+	}
+
+	logger.Debug("gateway: created per-request client", "host", host)
+	return buildServer(client, logger)
 }
