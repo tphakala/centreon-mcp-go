@@ -21,6 +21,7 @@ const (
 	serverInstructions = "Centreon MCP Server. Provides tools for monitoring hosts and services, managing downtimes and acknowledgements, configuring hosts/services/groups/templates, and platform administration. Use centreon_monitoring_* for real-time status, centreon_resource_* for bulk operations, centreon_downtime_* and centreon_acknowledgement_* for per-resource management, and centreon_host_*/centreon_service_* for configuration."
 
 	readTimeout       = 30 * time.Second
+	readHeaderTimeout = 10 * time.Second
 	writeTimeout      = 60 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 15 * time.Second
@@ -51,11 +52,15 @@ func newCentreonClient(host string, cfg *Config, logger *slog.Logger) (*centreon
 		opts = append(opts, centreon.WithLogger(logger))
 	}
 	if cfg.AllowSelfSigned {
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, fmt.Errorf("unexpected default transport type")
+		}
+		transport := defaultTransport.Clone()
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested self-signed cert support
 		httpClient := &http.Client{
-			Timeout: selfSignedTimeout,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // user-requested self-signed cert support
-			},
+			Timeout:   selfSignedTimeout,
+			Transport: transport,
 		}
 		opts = append(opts, centreon.WithHTTPClient(httpClient))
 	}
@@ -144,11 +149,12 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 
 	addr := net.JoinHostPort(cfg.HTTPHost, strconv.Itoa(cfg.HTTPPort))
 	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  readTimeout,
-		WriteTimeout: writeTimeout,
-		IdleTimeout:  idleTimeout,
+		Addr:              addr,
+		Handler:           mux,
+		ReadTimeout:       readTimeout,
+		ReadHeaderTimeout: readHeaderTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 
 	go func() {
