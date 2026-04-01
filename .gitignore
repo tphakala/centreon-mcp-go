@@ -1,0 +1,3 @@
+centreon-mcp-go
+*.exe
+.env

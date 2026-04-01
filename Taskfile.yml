@@ -1,0 +1,79 @@
+version: '3'
+
+vars:
+  BINARY_NAME: centreon-mcp-go
+  IMAGE_NAME: centreon-mcp-go
+  CONTAINER_TOOL: podman
+
+tasks:
+
+  default:
+    desc: Run all local checks (fmt, tidy, vet, lint, test)
+    cmds:
+      - task: check
+
+  check:
+    desc: Run all local checks (fmt, tidy, vet, lint, test)
+    cmds:
+      - task: go:fmt
+      - task: go:tidy
+      - task: go:vet
+      - task: go:lint
+      - task: go:test
+
+  ci:
+    desc: Full CI pipeline — check then build
+    cmds:
+      - task: check
+      - task: go:build
+
+  go:build:
+    desc: Build the binary
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BINARY_NAME}}'
+    cmds:
+      - go build -o {{.BINARY_NAME}} .
+
+  go:run:
+    desc: Run the server in stdio mode (requires env vars)
+    cmds:
+      - go run .
+
+  go:test:
+    desc: Run tests with race detector
+    cmds:
+      - go test -v -race ./...
+
+  go:vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  go:lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  go:fmt:
+    desc: Format code
+    cmds:
+      - goimports -w .
+
+  go:tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  go:clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -f {{.BINARY_NAME}}
+
+  image:build:
+    desc: Build container image (override with CONTAINER_TOOL=docker)
+    cmds:
+      - '{{.CONTAINER_TOOL}} build -t {{.IMAGE_NAME}} .'
