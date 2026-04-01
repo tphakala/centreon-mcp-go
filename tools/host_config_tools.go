@@ -135,7 +135,7 @@ func hostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx conte
 func hostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateHostInput) (*mcp.CallToolResult, any, error) {
 		logger.Info("centreon_host_create", "name", in.Name, "address", in.Address)
-		id, err := client.Hosts.Create(ctx, centreon.CreateHostRequest{
+		id, err := client.Hosts.Create(ctx, &centreon.CreateHostRequest{
 			MonitoringServerID: in.MonitoringServerID,
 			Name:               in.Name,
 			Address:            in.Address,
@@ -166,7 +166,7 @@ func hostUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			ActiveChecksEnabled: in.ActiveChecksEnabled,
 			IsActivated:         in.IsActivated,
 		}
-		if err := client.Hosts.Update(ctx, in.ID, req); err != nil {
+		if err := client.Hosts.Update(ctx, in.ID, &req); err != nil {
 			logger.Error("failed: centreon_host_update", "error", err, "id", in.ID)
 			res, anyVal := errorResult("failed to update host %d: %v", in.ID, err)
 			return res, anyVal, nil

@@ -132,7 +132,7 @@ func serviceGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 func serviceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceInput) (*mcp.CallToolResult, any, error) {
 		logger.Info("centreon_service_create", "name", in.Name, "hostID", in.HostID)
-		id, err := client.Services.Create(ctx, centreon.CreateServiceRequest{
+		id, err := client.Services.Create(ctx, &centreon.CreateServiceRequest{
 			HostID:         in.HostID,
 			Name:           in.Name,
 			Alias:          in.Alias,
@@ -161,7 +161,7 @@ func serviceUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 			ActiveChecksEnabled: in.ActiveChecksEnabled,
 			IsActivated:         in.IsActivated,
 		}
-		if err := client.Services.Update(ctx, in.ID, req); err != nil {
+		if err := client.Services.Update(ctx, in.ID, &req); err != nil {
 			logger.Error("failed: centreon_service_update", "error", err, "id", in.ID)
 			res, anyVal := errorResult("failed to update service %d: %v", in.ID, err)
 			return res, anyVal, nil

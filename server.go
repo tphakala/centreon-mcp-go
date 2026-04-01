@@ -28,6 +28,8 @@ const (
 	tokenCacheTTL     = 50 * time.Minute
 	selfSignedTimeout = 30 * time.Second
 	authModeEnv       = "env"
+	transportStdio    = "stdio"
+	transportHTTP     = "http"
 )
 
 // buildServer creates an MCP server with all tools registered.
@@ -88,9 +90,9 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	}
 
 	switch cfg.Transport {
-	case "stdio":
+	case transportStdio:
 		return runStdio(ctx, cfg, logger, httpClient)
-	case "http":
+	case transportHTTP:
 		return runHTTP(ctx, cfg, logger, httpClient)
 	default:
 		return fmt.Errorf("unknown transport %q: expected \"stdio\" or \"http\"", cfg.Transport)
