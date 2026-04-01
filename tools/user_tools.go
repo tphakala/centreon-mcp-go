@@ -74,7 +74,7 @@ func userUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			res, anyVal := errorResult("failed to update user %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Updated user %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_user_update", "Updated user %d", in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -109,7 +109,7 @@ func userFilterCreateHandler(client *centreon.Client, logger *slog.Logger) func(
 			res, anyVal := errorResult("failed to create user filter %q: %v", in.Name, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Created user filter with ID %d", id)
+		res, anyVal := successResult(logger, "centreon_user_filter_create", "Created user filter with ID %d", id)
 		return res, anyVal, nil
 	}
 }

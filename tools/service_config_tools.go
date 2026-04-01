@@ -157,7 +157,7 @@ func serviceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 			res, anyVal := errorResult("failed to create service %q: %v", in.Name, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Created service with ID %d", id)
+		res, anyVal := successResult(logger, "centreon_service_create", "Created service with ID %d", id)
 		return res, anyVal, nil
 	}
 }
@@ -180,7 +180,7 @@ func serviceUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 			res, anyVal := errorResult("failed to update service %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Updated service %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_service_update", "Updated service %d", in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -193,7 +193,7 @@ func serviceDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 			res, anyVal := errorResult("failed to delete service %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Deleted service %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_service_delete", "Deleted service %d", in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -216,7 +216,7 @@ func serviceGroupCreateHandler(client *centreon.Client, logger *slog.Logger) fun
 			res, anyVal := errorResult("failed to create service group %q: %v", in.Name, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Created service group with ID %d", id)
+		res, anyVal := successResult(logger, "centreon_service_group_create", "Created service group with ID %d", id)
 		return res, anyVal, nil
 	}
 }
@@ -229,7 +229,7 @@ func serviceGroupDeleteHandler(client *centreon.Client, logger *slog.Logger) fun
 			res, anyVal := errorResult("failed to delete service group %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Deleted service group %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_service_group_delete", "Deleted service group %d", in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -252,7 +252,7 @@ func serviceCategoryCreateHandler(client *centreon.Client, logger *slog.Logger) 
 			res, anyVal := errorResult("failed to create service category %q: %v", in.Name, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Created service category with ID %d", id)
+		res, anyVal := successResult(logger, "centreon_service_category_create", "Created service category with ID %d", id)
 		return res, anyVal, nil
 	}
 }
@@ -265,7 +265,7 @@ func serviceCategoryDeleteHandler(client *centreon.Client, logger *slog.Logger) 
 			res, anyVal := errorResult("failed to delete service category %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Deleted service category %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_service_category_delete", "Deleted service category %d", in.ID)
 		return res, anyVal, nil
 	}
 }

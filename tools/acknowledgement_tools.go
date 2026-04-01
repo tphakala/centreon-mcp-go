@@ -138,7 +138,7 @@ func acknowledgementHostCreateHandler(client *centreon.Client, logger *slog.Logg
 			res, anyVal := errorResult("failed to create acknowledgement for host %d: %v", in.HostID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Acknowledgement created for host %d", in.HostID)
+		res, anyVal := successResult(logger, "centreon_acknowledgement_host_create", "Acknowledgement created for host %d", in.HostID)
 		return res, anyVal, nil
 	}
 }
@@ -157,7 +157,7 @@ func acknowledgementServiceCreateHandler(client *centreon.Client, logger *slog.L
 			res, anyVal := errorResult("failed to create acknowledgement for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Acknowledgement created for service %d on host %d", in.ServiceID, in.HostID)
+		res, anyVal := successResult(logger, "centreon_acknowledgement_service_create", "Acknowledgement created for service %d on host %d", in.ServiceID, in.HostID)
 		return res, anyVal, nil
 	}
 }
@@ -170,7 +170,7 @@ func acknowledgementHostCancelHandler(client *centreon.Client, logger *slog.Logg
 			res, anyVal := errorResult("failed to cancel acknowledgement for host %d: %v", in.HostID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Acknowledgement cancelled for host %d", in.HostID)
+		res, anyVal := successResult(logger, "centreon_acknowledgement_host_cancel", "Acknowledgement cancelled for host %d", in.HostID)
 		return res, anyVal, nil
 	}
 }
@@ -183,7 +183,7 @@ func acknowledgementServiceCancelHandler(client *centreon.Client, logger *slog.L
 			res, anyVal := errorResult("failed to cancel acknowledgement for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Acknowledgement cancelled for service %d on host %d", in.ServiceID, in.HostID)
+		res, anyVal := successResult(logger, "centreon_acknowledgement_service_cancel", "Acknowledgement cancelled for service %d on host %d", in.ServiceID, in.HostID)
 		return res, anyVal, nil
 	}
 }

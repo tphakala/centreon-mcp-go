@@ -85,6 +85,19 @@ func textResult(format string, args ...any) (res *mcp.CallToolResult, anyVal any
 	}, nil
 }
 
+// successResult logs a mutation success at INFO and builds a text result.
+//
+//nolint:unparam // anyVal is always nil; kept for signature consistency with jsonResult and errorResult.
+func successResult(logger *slog.Logger, toolName, format string, args ...any) (res *mcp.CallToolResult, anyVal any) {
+	text := fmt.Sprintf(format, args...)
+	logger.Info(toolName+" succeeded", "result", text)
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: text},
+		},
+	}, nil
+}
+
 // jsonResult builds a JSON-formatted text content result.
 func jsonResult(data any) (res *mcp.CallToolResult, anyVal any) {
 	b, err := json.MarshalIndent(data, "", "  ")
@@ -151,6 +164,8 @@ func commonListHandler[T any](
 		res, anyVal := errorResult("failed: %s: %v", toolName, err)
 		return res, anyVal, nil
 	}
+
+	logger.Debug(toolName+" completed", "results", len(resp.Result), "total", resp.Meta.Total, "page", resp.Meta.Page)
 
 	res, anyVal := jsonResult(resp)
 	return res, anyVal, nil

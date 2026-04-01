@@ -86,7 +86,7 @@ func timePeriodCreateHandler(client *centreon.Client, logger *slog.Logger) func(
 			res, anyVal := errorResult("failed to create time period %q: %v", in.Name, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Created time period with ID %d", id)
+		res, anyVal := successResult(logger, "centreon_time_period_create", "Created time period with ID %d", id)
 		return res, anyVal, nil
 	}
 }

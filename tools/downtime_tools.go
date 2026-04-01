@@ -107,7 +107,7 @@ func downtimeCancelHandler(client *centreon.Client, logger *slog.Logger) func(ct
 			res, anyVal := errorResult("failed to cancel downtime %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Downtime %d cancelled", in.ID)
+		res, anyVal := successResult(logger, "centreon_downtime_cancel", "Downtime %d cancelled", in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -174,7 +174,7 @@ func downtimeHostCreateHandler(client *centreon.Client, logger *slog.Logger) fun
 			res, anyVal := errorResult("failed to create downtime for host %d: %v", in.HostID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Downtime scheduled for host %d", in.HostID)
+		res, anyVal := successResult(logger, "centreon_downtime_host_create", "Downtime scheduled for host %d", in.HostID)
 		return res, anyVal, nil
 	}
 }
@@ -210,7 +210,7 @@ func downtimeServiceCreateHandler(client *centreon.Client, logger *slog.Logger) 
 			res, anyVal := errorResult("failed to create downtime for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Downtime scheduled for service %d on host %d", in.ServiceID, in.HostID)
+		res, anyVal := successResult(logger, "centreon_downtime_service_create", "Downtime scheduled for service %d on host %d", in.ServiceID, in.HostID)
 		return res, anyVal, nil
 	}
 }
@@ -223,7 +223,7 @@ func downtimeHostCancelHandler(client *centreon.Client, logger *slog.Logger) fun
 			res, anyVal := errorResult("failed to cancel downtimes for host %d: %v", in.HostID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Downtime cancelled for host %d", in.HostID)
+		res, anyVal := successResult(logger, "centreon_downtime_host_cancel", "Downtime cancelled for host %d", in.HostID)
 		return res, anyVal, nil
 	}
 }
@@ -236,7 +236,7 @@ func downtimeServiceCancelHandler(client *centreon.Client, logger *slog.Logger) 
 			res, anyVal := errorResult("failed to cancel downtimes for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Downtime cancelled for service %d on host %d", in.ServiceID, in.HostID)
+		res, anyVal := successResult(logger, "centreon_downtime_service_cancel", "Downtime cancelled for service %d on host %d", in.ServiceID, in.HostID)
 		return res, anyVal, nil
 	}
 }

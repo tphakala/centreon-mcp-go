@@ -67,7 +67,7 @@ func bulkAcknowledgeHandler(client *centreon.Client, logger *slog.Logger) func(c
 			res, anyVal := errorResult("failed to acknowledge: %v", err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Acknowledged %s %d", in.Type, in.ID)
+		res, anyVal := successResult(logger, "centreon_resource_acknowledge", "Acknowledged %s %d", in.Type, in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -118,7 +118,7 @@ func bulkDowntimeHandler(client *centreon.Client, logger *slog.Logger) func(ctx 
 			res, anyVal := errorResult("failed to schedule downtime: %v", err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Scheduled downtime for %s %d", in.Type, in.ID)
+		res, anyVal := successResult(logger, "centreon_resource_downtime", "Scheduled downtime for %s %d", in.Type, in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -145,7 +145,7 @@ func bulkCheckHandler(client *centreon.Client, logger *slog.Logger) func(ctx con
 			res, anyVal := errorResult("failed to force check: %v", err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Forced check for %s %d", in.Type, in.ID)
+		res, anyVal := successResult(logger, "centreon_resource_check", "Forced check for %s %d", in.Type, in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -184,7 +184,7 @@ func bulkSubmitHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			res, anyVal := errorResult("failed to submit check result: %v", err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Submitted check result for %s %d (status=%d)", in.Type, in.ID, in.Status)
+		res, anyVal := successResult(logger, "centreon_resource_submit", "Submitted check result for %s %d (status=%d)", in.Type, in.ID, in.Status)
 		return res, anyVal, nil
 	}
 }
@@ -213,7 +213,7 @@ func bulkCommentHandler(client *centreon.Client, logger *slog.Logger) func(ctx c
 			res, anyVal := errorResult("failed to add comment: %v", err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Added comment to %s %d", in.Type, in.ID)
+		res, anyVal := successResult(logger, "centreon_resource_comment", "Added comment to %s %d", in.Type, in.ID)
 		return res, anyVal, nil
 	}
 }

@@ -169,7 +169,7 @@ func hostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			res, anyVal := errorResult("failed to create host %q: %v", in.Name, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Created host with ID %d", id)
+		res, anyVal := successResult(logger, "centreon_host_create", "Created host with ID %d", id)
 		return res, anyVal, nil
 	}
 }
@@ -193,7 +193,7 @@ func hostUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			res, anyVal := errorResult("failed to update host %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Updated host %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_host_update", "Updated host %d", in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -206,7 +206,7 @@ func hostDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			res, anyVal := errorResult("failed to delete host %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Deleted host %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_host_delete", "Deleted host %d", in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -243,7 +243,7 @@ func hostGroupCreateHandler(client *centreon.Client, logger *slog.Logger) func(c
 			res, anyVal := errorResult("failed to create host group %q: %v", in.Name, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Created host group with ID %d", id)
+		res, anyVal := successResult(logger, "centreon_host_group_create", "Created host group with ID %d", id)
 		return res, anyVal, nil
 	}
 }
@@ -259,7 +259,7 @@ func hostGroupUpdateHandler(client *centreon.Client, logger *slog.Logger) func(c
 			res, anyVal := errorResult("failed to update host group %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Updated host group %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_host_group_update", "Updated host group %d", in.ID)
 		return res, anyVal, nil
 	}
 }
@@ -272,7 +272,7 @@ func hostGroupDeleteHandler(client *centreon.Client, logger *slog.Logger) func(c
 			res, anyVal := errorResult("failed to delete host group %d: %v", in.ID, err)
 			return res, anyVal, nil
 		}
-		res, anyVal := textResult("Deleted host group %d", in.ID)
+		res, anyVal := successResult(logger, "centreon_host_group_delete", "Deleted host group %d", in.ID)
 		return res, anyVal, nil
 	}
 }
