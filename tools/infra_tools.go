@@ -36,6 +36,16 @@ func RegisterInfraTools(s *mcp.Server, client *centreon.Client, logger *slog.Log
 	}, timePeriodCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_time_period_update",
+		Description: "Replace an existing time period configuration (full update).",
+	}, timePeriodUpdateHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_time_period_delete",
+		Description: "Delete a time period configuration by ID.",
+	}, timePeriodDeleteHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_poller_apply",
 		Description: "Apply configuration (generate and reload) for a specific monitoring server (poller) by ID.",
 	}, pollerApplyHandler(client, logger))
@@ -57,6 +67,15 @@ type CreateTimePeriodInput struct {
 	Name      string               `json:"name"                jsonschema:"Time period name"`
 	Alias     string               `json:"alias,omitempty"     jsonschema:"Time period alias"`
 	Days []TimePeriodDayInput `json:"days" jsonschema:"Day definitions (required, use empty array [] if none)"`
+}
+
+// UpdateTimePeriodInput is the input for the centreon_time_period_update tool.
+type UpdateTimePeriodInput struct {
+	ID        int                  `json:"id"                  jsonschema:"Time period ID"`
+	Name      string               `json:"name"                jsonschema:"Time period name"`
+	Alias     string               `json:"alias,omitempty"     jsonschema:"Time period alias"`
+	Days      []TimePeriodDayInput `json:"days"                jsonschema:"Day definitions (required, use empty array [] if none)"`
+	Templates []int                `json:"templates,omitempty" jsonschema:"Template IDs to inherit from"`
 }
 
 // PollerApplyInput is the input for the centreon_poller_apply tool.
@@ -160,4 +179,55 @@ func timePeriodCreateHandler(client *centreon.Client, logger *slog.Logger) func(
 		res, anyVal := successResult(logger, "centreon_time_period_create", "Created time period with ID %d", id)
 		return res, anyVal, nil
 	}
+}
+
+func timePeriodUpdateHandlerFn(
+	fn func(context.Context, int, *centreon.UpdateTimePeriodRequest) error,
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateTimePeriodInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in UpdateTimePeriodInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_time_period_update")
+		logger.Info("centreon_time_period_update", "id", in.ID)
+		days := make([]centreon.TimePeriodDay, 0, len(in.Days))
+		for _, d := range in.Days {
+			days = append(days, centreon.TimePeriodDay{Day: d.Day, TimeRange: d.TimeRange})
+		}
+		if err := fn(ctx, in.ID, &centreon.UpdateTimePeriodRequest{
+			Name:      in.Name,
+			Alias:     in.Alias,
+			Days:      days,
+			Templates: in.Templates,
+		}); err != nil {
+			logger.Error("failed: centreon_time_period_update", "error", err, "id", in.ID)
+			res, anyVal := errorResult("failed to update time period %d: %v", in.ID, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_time_period_update", "Updated time period %d", in.ID)
+		return res, anyVal, nil
+	}
+}
+
+func timePeriodUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateTimePeriodInput) (*mcp.CallToolResult, any, error) {
+	return timePeriodUpdateHandlerFn(client.TimePeriods.Update, logger)
+}
+
+func timePeriodDeleteHandlerFn(
+	fn func(context.Context, int) error,
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_time_period_delete")
+		logger.Info("centreon_time_period_delete", "id", in.ID)
+		if err := fn(ctx, in.ID); err != nil {
+			logger.Error("failed: centreon_time_period_delete", "error", err, "id", in.ID)
+			res, anyVal := errorResult("failed to delete time period %d: %v", in.ID, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_time_period_delete", "Deleted time period %d", in.ID)
+		return res, anyVal, nil
+	}
+}
+
+func timePeriodDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return timePeriodDeleteHandlerFn(client.TimePeriods.Delete, logger)
 }
