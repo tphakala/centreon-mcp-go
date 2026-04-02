@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/quasilyte/go-ruleguard/dsl v0.3.23
-	github.com/tphakala/centreon-go-client v1.5.0
+	github.com/tphakala/centreon-go-client v1.5.1
 )
 
 require (

@@ -130,7 +130,7 @@ func acknowledgementHostCreateHandler(client *centreon.Client, logger *slog.Logg
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateHostAcknowledgementInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_host_create")
 		logger.Info("centreon_acknowledgement_host_create", "hostID", in.HostID)
-		ackReq := &centreon.CreateAcknowledgementRequest{
+		ackReq := &centreon.CreateHostAcknowledgementRequest{
 			Comment:             in.Comment,
 			IsSticky:            in.IsSticky,
 			IsNotifyContacts:    in.IsNotifyContacts,
@@ -151,7 +151,7 @@ func acknowledgementServiceCreateHandler(client *centreon.Client, logger *slog.L
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceAcknowledgementInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_service_create")
 		logger.Info("centreon_acknowledgement_service_create", "hostID", in.HostID, "serviceID", in.ServiceID)
-		ackReq := &centreon.CreateAcknowledgementRequest{
+		ackReq := &centreon.CreateServiceAcknowledgementRequest{
 			Comment:             in.Comment,
 			IsSticky:            in.IsSticky,
 			IsNotifyContacts:    in.IsNotifyContacts,

@@ -166,7 +166,7 @@ func downtimeHostCreateHandler(client *centreon.Client, logger *slog.Logger) fun
 			res, anyVal := errorResult("endTime must be after startTime")
 			return res, anyVal, nil
 		}
-		downtimeReq := &centreon.CreateDowntimeRequest{
+		downtimeReq := &centreon.CreateHostDowntimeRequest{
 			Comment:      in.Comment,
 			StartTime:    startTime,
 			EndTime:      endTime,
@@ -204,7 +204,7 @@ func downtimeServiceCreateHandler(client *centreon.Client, logger *slog.Logger) 
 			res, anyVal := errorResult("endTime must be after startTime")
 			return res, anyVal, nil
 		}
-		downtimeReq := &centreon.CreateDowntimeRequest{
+		downtimeReq := &centreon.CreateServiceDowntimeRequest{
 			Comment:   in.Comment,
 			StartTime: startTime,
 			EndTime:   endTime,
