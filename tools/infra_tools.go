@@ -36,10 +36,18 @@ func RegisterInfraTools(s *mcp.Server, client *centreon.Client, logger *slog.Log
 	}, timePeriodCreateHandler(client, logger))
 }
 
+// TimePeriodDayInput represents a day range in a time period.
+type TimePeriodDayInput struct {
+	Day       int    `json:"day"        jsonschema:"Day of week (1=Monday through 7=Sunday)"`
+	TimeRange string `json:"timeRange"  jsonschema:"Time range (e.g. 00:00-24:00)"`
+}
+
 // CreateTimePeriodInput is the input for the centreon_time_period_create tool.
 type CreateTimePeriodInput struct {
-	Name  string `json:"name"            jsonschema:"Time period name"`
-	Alias string `json:"alias,omitempty" jsonschema:"Time period alias"`
+	Name      string               `json:"name"                jsonschema:"Time period name"`
+	Alias     string               `json:"alias,omitempty"     jsonschema:"Time period alias"`
+	Days      []TimePeriodDayInput `json:"days"                jsonschema:"Day definitions (required, use empty array [] if none)"`
+	Templates []int                `json:"templates"           jsonschema:"Template IDs to include (required, use empty array [] if none)"`
 }
 
 func serverListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {
@@ -79,9 +87,14 @@ func timePeriodCreateHandler(client *centreon.Client, logger *slog.Logger) func(
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateTimePeriodInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_time_period_create")
 		logger.Info("centreon_time_period_create", "name", in.Name)
+		days := make([]centreon.TimePeriodDay, 0, len(in.Days))
+		for _, d := range in.Days {
+			days = append(days, centreon.TimePeriodDay{Day: d.Day, TimeRange: d.TimeRange})
+		}
 		id, err := client.TimePeriods.Create(ctx, centreon.CreateTimePeriodRequest{
 			Name:  in.Name,
 			Alias: in.Alias,
+			Days:  days,
 		})
 		if err != nil {
 			logger.Error("failed: centreon_time_period_create", "error", err, "name", in.Name)
