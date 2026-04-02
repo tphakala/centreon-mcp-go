@@ -81,7 +81,7 @@ type MacroInput struct {
 	Name        string `json:"name"                    jsonschema:"Macro name"`
 	Value       string `json:"value,omitempty"         jsonschema:"Macro value"`
 	IsPassword  bool   `json:"isPassword,omitempty"    jsonschema:"Whether the value is a password"`
-	Description string `json:"description,omitempty"   jsonschema:"Macro description"`
+	Description string `json:"description"             jsonschema:"Macro description"`
 }
 
 // CreateHostInput is the input for the centreon_host_create tool.
