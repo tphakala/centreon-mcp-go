@@ -149,11 +149,11 @@ func buildListOptions(in ListInput) []centreon.ListOption {
 	}
 	if in.Search != "" {
 		search := in.Search
-		if len(search) > 0 && search[0] != '%' {
+		if search != "" && search[0] != '%' {
 			search = "%" + search
 		}
-		if len(search) > 0 && search[len(search)-1] != '%' {
-			search = search + "%"
+		if search != "" && search[len(search)-1] != '%' {
+			search += "%"
 		}
 		opts = append(opts, centreon.WithSearch(centreon.Lk("name", search)))
 	}

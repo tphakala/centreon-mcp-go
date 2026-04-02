@@ -121,8 +121,7 @@ func serviceListHandler(client *centreon.Client, logger *slog.Logger) func(ctx c
 func serviceListByHostHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
 		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
-		opts := buildListOptions(listIn)
-		return commonListHandler(ctx, logger, "centreon_service_list_by_host", listIn, func(ctx context.Context, _ ...centreon.ListOption) (*centreon.ListResponse[centreon.Service], error) {
+		return commonListHandler(ctx, logger, "centreon_service_list_by_host", listIn, func(ctx context.Context, opts ...centreon.ListOption) (*centreon.ListResponse[centreon.Service], error) {
 			return client.Services.ListByHost(ctx, in.HostID, opts...)
 		})
 	}
