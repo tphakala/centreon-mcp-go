@@ -97,10 +97,11 @@ func TestTimePeriodUpdateHandlerFn_Success(t *testing.T) {
 	}
 	handler := timePeriodUpdateHandlerFn(fn, testLogger(t))
 	in := UpdateTimePeriodInput{
-		ID:    7,
-		Name:  "workhours",
-		Alias: "Work Hours",
-		Days:  []TimePeriodDayInput{{Day: 1, TimeRange: "08:00-17:00"}},
+		ID:        7,
+		Name:      "workhours",
+		Alias:     "Work Hours",
+		Days:      []TimePeriodDayInput{{Day: 1, TimeRange: "08:00-17:00"}},
+		Templates: []int{1, 2},
 	}
 	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, in)
 	if err != nil {
@@ -117,6 +118,12 @@ func TestTimePeriodUpdateHandlerFn_Success(t *testing.T) {
 	}
 	if len(calledReq.Days) != 1 || calledReq.Days[0].Day != 1 {
 		t.Errorf("unexpected days: %+v", calledReq.Days)
+	}
+	if calledReq.Alias != "Work Hours" {
+		t.Errorf("expected alias='Work Hours', got %q", calledReq.Alias)
+	}
+	if len(calledReq.Templates) != 2 || calledReq.Templates[0] != 1 {
+		t.Errorf("unexpected templates: %+v", calledReq.Templates)
 	}
 }
 
