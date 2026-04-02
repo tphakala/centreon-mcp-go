@@ -34,6 +34,16 @@ func RegisterInfraTools(s *mcp.Server, client *centreon.Client, logger *slog.Log
 		Name:        "centreon_time_period_create",
 		Description: "Create a new time period configuration.",
 	}, timePeriodCreateHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_poller_apply",
+		Description: "Apply configuration (generate and reload) for a specific monitoring server (poller) by ID.",
+	}, pollerApplyHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_poller_apply_all",
+		Description: "Apply configuration (generate and reload) for all monitoring servers (pollers).",
+	}, pollerApplyAllHandler(client, logger))
 }
 
 // TimePeriodDayInput represents a day range in a time period.
@@ -47,6 +57,53 @@ type CreateTimePeriodInput struct {
 	Name      string               `json:"name"                jsonschema:"Time period name"`
 	Alias     string               `json:"alias,omitempty"     jsonschema:"Time period alias"`
 	Days []TimePeriodDayInput `json:"days" jsonschema:"Day definitions (required, use empty array [] if none)"`
+}
+
+// PollerApplyInput is the input for the centreon_poller_apply tool.
+type PollerApplyInput struct {
+	PollerID int `json:"pollerID" jsonschema:"Poller (monitoring server) ID"`
+}
+
+func pollerApplyHandlerFn(
+	fn func(context.Context, int) error,
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in PollerApplyInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in PollerApplyInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_poller_apply")
+		logger.Info("centreon_poller_apply", "pollerID", in.PollerID)
+		if err := fn(ctx, in.PollerID); err != nil {
+			logger.Error("failed: centreon_poller_apply", "error", err, "pollerID", in.PollerID)
+			res, anyVal := errorResult("failed to apply configuration for poller %d: %v", in.PollerID, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_poller_apply", "Applied configuration for poller %d", in.PollerID)
+		return res, anyVal, nil
+	}
+}
+
+func pollerApplyAllHandlerFn(
+	fn func(context.Context) error,
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_poller_apply_all")
+		logger.Info("centreon_poller_apply_all")
+		if err := fn(ctx); err != nil {
+			logger.Error("failed: centreon_poller_apply_all", "error", err)
+			res, anyVal := errorResult("failed to apply configuration for all pollers: %v", err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_poller_apply_all", "Applied configuration for all pollers")
+		return res, anyVal, nil
+	}
+}
+
+func pollerApplyHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in PollerApplyInput) (*mcp.CallToolResult, any, error) {
+	return pollerApplyHandlerFn(client.MonitoringServers.GenerateAndReload, logger)
+}
+
+func pollerApplyAllHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+	return pollerApplyAllHandlerFn(client.MonitoringServers.GenerateAndReloadAll, logger)
 }
 
 func serverListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {
