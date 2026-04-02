@@ -2,7 +2,7 @@ version: '3'
 
 vars:
   BINARY_NAME: centreon-mcp-go
-  IMAGE_NAME: centreon-mcp-go
+  IMAGE_NAME: centreon-mcp
   CONTAINER_TOOL: podman
 
 tasks:

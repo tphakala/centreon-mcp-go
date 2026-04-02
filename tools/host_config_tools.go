@@ -107,7 +107,7 @@ type UpdateHostInput struct {
 	MaxCheckAttempts    *int    `json:"maxCheckAttempts,omitempty"      jsonschema:"Maximum check attempts"`
 	NormalCheckInterval *int    `json:"normalCheckInterval,omitempty"   jsonschema:"Normal check interval in seconds"`
 	RetryCheckInterval  *int    `json:"retryCheckInterval,omitempty"    jsonschema:"Retry check interval in seconds"`
-	ActiveChecksEnabled *bool   `json:"activeChecksEnabled,omitempty"   jsonschema:"Whether active checks are enabled"`
+	ActiveCheckEnabled  *int    `json:"activeCheckEnabled,omitempty"    jsonschema:"Active check toggle (0=default, 1=enabled, 2=disabled)"`
 	IsActivated         *bool   `json:"isActivated,omitempty"           jsonschema:"Whether the host is activated"`
 }
 
@@ -188,7 +188,7 @@ func hostUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			MaxCheckAttempts:    in.MaxCheckAttempts,
 			NormalCheckInterval: in.NormalCheckInterval,
 			RetryCheckInterval:  in.RetryCheckInterval,
-			ActiveChecksEnabled: in.ActiveChecksEnabled,
+			ActiveCheckEnabled:  in.ActiveCheckEnabled,
 			IsActivated:         in.IsActivated,
 		}
 		if err := client.Hosts.Update(ctx, in.ID, &req); err != nil {
