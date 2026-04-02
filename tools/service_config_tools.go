@@ -71,6 +71,21 @@ func RegisterServiceConfigTools(s *mcp.Server, client *centreon.Client, logger *
 	}, serviceSeverityListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_service_severity_create",
+		Description: "Create a new service severity configuration.",
+	}, serviceSeverityCreateHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_service_severity_update",
+		Description: "Replace an existing service severity configuration (full update).",
+	}, serviceSeverityUpdateHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_service_severity_delete",
+		Description: "Delete a service severity configuration by ID.",
+	}, serviceSeverityDeleteHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_template_list",
 		Description: "List service template configurations. Supports pagination and name filtering.",
 	}, serviceTemplateListHandler(client, logger))
@@ -110,6 +125,23 @@ type CreateServiceGroupInput struct {
 type CreateServiceCategoryInput struct {
 	Name  string `json:"name"            jsonschema:"Service category name"`
 	Alias string `json:"alias,omitempty" jsonschema:"Service category alias"`
+}
+
+// CreateServiceSeverityInput is the input for the centreon_service_severity_create tool.
+type CreateServiceSeverityInput struct {
+	Name   string `json:"name"            jsonschema:"Service severity name"`
+	Alias  string `json:"alias,omitempty" jsonschema:"Service severity alias"`
+	Level  int    `json:"level"           jsonschema:"Severity level (lower = more severe)"`
+	IconID int    `json:"iconID"          jsonschema:"Icon ID"`
+}
+
+// UpdateServiceSeverityInput is the input for the centreon_service_severity_update tool.
+type UpdateServiceSeverityInput struct {
+	ID     int    `json:"id"              jsonschema:"Service severity ID"`
+	Name   string `json:"name"            jsonschema:"Service severity name"`
+	Alias  string `json:"alias,omitempty" jsonschema:"Service severity alias"`
+	Level  int    `json:"level"           jsonschema:"Severity level (lower = more severe)"`
+	IconID int    `json:"iconID"          jsonschema:"Icon ID"`
 }
 
 func serviceListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {
@@ -274,6 +306,80 @@ func serviceSeverityListHandler(client *centreon.Client, logger *slog.Logger) fu
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {
 		return commonListHandler(ctx, logger, "centreon_service_severity_list", in, client.ServiceSeverities.List)
 	}
+}
+
+func serviceSeverityCreateHandlerFn(
+	fn func(context.Context, centreon.CreateServiceSeverityRequest) (int, error),
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceSeverityInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateServiceSeverityInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_severity_create")
+		logger.Info("centreon_service_severity_create", "name", in.Name)
+		id, err := fn(ctx, centreon.CreateServiceSeverityRequest{
+			Name:   in.Name,
+			Alias:  in.Alias,
+			Level:  in.Level,
+			IconID: in.IconID,
+		})
+		if err != nil {
+			logger.Error("failed: centreon_service_severity_create", "error", err, "name", in.Name)
+			res, anyVal := errorResult("failed to create service severity %q: %v", in.Name, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_service_severity_create", "Created service severity with ID %d", id)
+		return res, anyVal, nil
+	}
+}
+
+func serviceSeverityCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceSeverityInput) (*mcp.CallToolResult, any, error) {
+	return serviceSeverityCreateHandlerFn(client.ServiceSeverities.Create, logger)
+}
+
+func serviceSeverityUpdateHandlerFn(
+	fn func(context.Context, int, centreon.UpdateServiceSeverityRequest) error,
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateServiceSeverityInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in UpdateServiceSeverityInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_severity_update")
+		logger.Info("centreon_service_severity_update", "id", in.ID)
+		if err := fn(ctx, in.ID, centreon.UpdateServiceSeverityRequest{
+			Name:   in.Name,
+			Alias:  in.Alias,
+			Level:  in.Level,
+			IconID: in.IconID,
+		}); err != nil {
+			logger.Error("failed: centreon_service_severity_update", "error", err, "id", in.ID)
+			res, anyVal := errorResult("failed to update service severity %d: %v", in.ID, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_service_severity_update", "Updated service severity %d", in.ID)
+		return res, anyVal, nil
+	}
+}
+
+func serviceSeverityUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateServiceSeverityInput) (*mcp.CallToolResult, any, error) {
+	return serviceSeverityUpdateHandlerFn(client.ServiceSeverities.Update, logger)
+}
+
+func serviceSeverityDeleteHandlerFn(
+	fn func(context.Context, int) error,
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_severity_delete")
+		logger.Info("centreon_service_severity_delete", "id", in.ID)
+		if err := fn(ctx, in.ID); err != nil {
+			logger.Error("failed: centreon_service_severity_delete", "error", err, "id", in.ID)
+			res, anyVal := errorResult("failed to delete service severity %d: %v", in.ID, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_service_severity_delete", "Deleted service severity %d", in.ID)
+		return res, anyVal, nil
+	}
+}
+
+func serviceSeverityDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return serviceSeverityDeleteHandlerFn(client.ServiceSeverities.Delete, logger)
 }
 
 func serviceTemplateListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {
