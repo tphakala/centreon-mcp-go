@@ -54,7 +54,7 @@ func bulkAcknowledgeHandler(client *centreon.Client, logger *slog.Logger) func(c
 		logger.Info("centreon_resource_acknowledge", "type", in.Type, "id", in.ID, "comment", in.Comment)
 		ref := centreon.ResourceRef{Type: in.Type, ID: in.ID}
 		if in.ParentID != 0 {
-			ref.Parent = &centreon.ResourceRef{Type: "host", ID: in.ParentID}
+			ref.Parent = &centreon.ParentRef{ID: in.ParentID}
 		}
 		req := &centreon.AcknowledgeRequest{
 			Resources:           []centreon.ResourceRef{ref},
@@ -105,7 +105,7 @@ func bulkDowntimeHandler(client *centreon.Client, logger *slog.Logger) func(ctx 
 		}
 		ref := centreon.ResourceRef{Type: in.Type, ID: in.ID}
 		if in.ParentID != 0 {
-			ref.Parent = &centreon.ResourceRef{Type: "host", ID: in.ParentID}
+			ref.Parent = &centreon.ParentRef{ID: in.ParentID}
 		}
 		downtimeReq := &centreon.DowntimeRequest{
 			Resources: []centreon.ResourceRef{ref},
@@ -138,7 +138,7 @@ func bulkCheckHandler(client *centreon.Client, logger *slog.Logger) func(ctx con
 		logger.Info("centreon_resource_check", "type", in.Type, "id", in.ID)
 		ref := centreon.ResourceRef{Type: in.Type, ID: in.ID}
 		if in.ParentID != 0 {
-			ref.Parent = &centreon.ResourceRef{Type: "host", ID: in.ParentID}
+			ref.Parent = &centreon.ParentRef{ID: in.ParentID}
 		}
 		req := &centreon.CheckRequest{
 			Resources: []centreon.ResourceRef{ref},
@@ -167,9 +167,9 @@ func bulkSubmitHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in BulkSubmitInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_resource_submit")
 		logger.Info("centreon_resource_submit", "type", in.Type, "id", in.ID, "status", in.Status)
-		var parent *centreon.ResourceRef
+		var parent *centreon.ParentRef
 		if in.ParentID != 0 {
-			parent = &centreon.ResourceRef{Type: "host", ID: in.ParentID}
+			parent = &centreon.ParentRef{ID: in.ParentID}
 		}
 		req := &centreon.SubmitResultRequest{
 			Resources: []centreon.SubmitResource{
@@ -207,7 +207,7 @@ func bulkCommentHandler(client *centreon.Client, logger *slog.Logger) func(ctx c
 		logger.Info("centreon_resource_comment", "type", in.Type, "id", in.ID, "comment", in.Comment)
 		ref := centreon.ResourceRef{Type: in.Type, ID: in.ID}
 		if in.ParentID != 0 {
-			ref.Parent = &centreon.ResourceRef{Type: "host", ID: in.ParentID}
+			ref.Parent = &centreon.ParentRef{ID: in.ParentID}
 		}
 		req := &centreon.CommentRequest{
 			Resources: []centreon.ResourceRef{ref},

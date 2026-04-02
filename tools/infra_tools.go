@@ -147,7 +147,7 @@ func timePeriodCreateHandler(client *centreon.Client, logger *slog.Logger) func(
 		for _, d := range in.Days {
 			days = append(days, centreon.TimePeriodDay{Day: d.Day, TimeRange: d.TimeRange})
 		}
-		id, err := client.TimePeriods.Create(ctx, centreon.CreateTimePeriodRequest{
+		id, err := client.TimePeriods.Create(ctx, &centreon.CreateTimePeriodRequest{
 			Name:  in.Name,
 			Alias: in.Alias,
 			Days:  days,
