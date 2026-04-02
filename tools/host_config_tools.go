@@ -66,6 +66,26 @@ func RegisterHostConfigTools(s *mcp.Server, client *centreon.Client, logger *slo
 	}, hostCategoryListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_host_category_get",
+		Description: "Get a single host category configuration by ID.",
+	}, hostCategoryGetHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_host_category_create",
+		Description: "Create a new host category configuration.",
+	}, hostCategoryCreateHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_host_category_update",
+		Description: "Replace an existing host category configuration (full update).",
+	}, hostCategoryUpdateHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_host_category_delete",
+		Description: "Delete a host category configuration by ID.",
+	}, hostCategoryDeleteHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_severity_list",
 		Description: "List host severity configurations. Supports pagination and name filtering.",
 	}, hostSeverityListHandler(client, logger))
@@ -122,6 +142,19 @@ type UpdateHostGroupInput struct {
 	ID    int    `json:"id"              jsonschema:"Host group ID"`
 	Name  string `json:"name"            jsonschema:"Host group name"`
 	Alias string `json:"alias,omitempty" jsonschema:"Host group alias"`
+}
+
+// CreateHostCategoryInput is the input for the centreon_host_category_create tool.
+type CreateHostCategoryInput struct {
+	Name  string `json:"name"            jsonschema:"Host category name"`
+	Alias string `json:"alias,omitempty" jsonschema:"Host category alias"`
+}
+
+// UpdateHostCategoryInput is the input for the centreon_host_category_update tool.
+type UpdateHostCategoryInput struct {
+	ID    int    `json:"id"              jsonschema:"Host category ID"`
+	Name  string `json:"name"            jsonschema:"Host category name"`
+	Alias string `json:"alias,omitempty" jsonschema:"Host category alias"`
 }
 
 func hostListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {
@@ -289,6 +322,98 @@ func hostCategoryListHandler(client *centreon.Client, logger *slog.Logger) func(
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {
 		return commonListHandler(ctx, logger, "centreon_host_category_list", in, client.HostCategories.List)
 	}
+}
+
+func hostCategoryGetHandlerFn(
+	fn func(context.Context, int) (*centreon.HostCategory, error),
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_category_get")
+		logger.Debug("centreon_host_category_get", "id", in.ID)
+		cat, err := fn(ctx, in.ID)
+		if err != nil {
+			logger.Error("failed: centreon_host_category_get", "error", err, "id", in.ID)
+			res, anyVal := errorResult("failed to get host category %d: %v", in.ID, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := jsonResult(cat)
+		return res, anyVal, nil
+	}
+}
+
+func hostCategoryGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return hostCategoryGetHandlerFn(client.HostCategories.Get, logger)
+}
+
+func hostCategoryCreateHandlerFn(
+	fn func(context.Context, centreon.CreateHostCategoryRequest) (int, error),
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostCategoryInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in CreateHostCategoryInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_category_create")
+		logger.Info("centreon_host_category_create", "name", in.Name)
+		id, err := fn(ctx, centreon.CreateHostCategoryRequest{
+			Name:  in.Name,
+			Alias: in.Alias,
+		})
+		if err != nil {
+			logger.Error("failed: centreon_host_category_create", "error", err, "name", in.Name)
+			res, anyVal := errorResult("failed to create host category %q: %v", in.Name, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_host_category_create", "Created host category with ID %d", id)
+		return res, anyVal, nil
+	}
+}
+
+func hostCategoryCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostCategoryInput) (*mcp.CallToolResult, any, error) {
+	return hostCategoryCreateHandlerFn(client.HostCategories.Create, logger)
+}
+
+func hostCategoryUpdateHandlerFn(
+	fn func(context.Context, int, centreon.UpdateHostCategoryRequest) error,
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateHostCategoryInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in UpdateHostCategoryInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_category_update")
+		logger.Info("centreon_host_category_update", "id", in.ID)
+		if err := fn(ctx, in.ID, centreon.UpdateHostCategoryRequest{
+			Name:  in.Name,
+			Alias: in.Alias,
+		}); err != nil {
+			logger.Error("failed: centreon_host_category_update", "error", err, "id", in.ID)
+			res, anyVal := errorResult("failed to update host category %d: %v", in.ID, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_host_category_update", "Updated host category %d", in.ID)
+		return res, anyVal, nil
+	}
+}
+
+func hostCategoryUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in UpdateHostCategoryInput) (*mcp.CallToolResult, any, error) {
+	return hostCategoryUpdateHandlerFn(client.HostCategories.Update, logger)
+}
+
+func hostCategoryDeleteHandlerFn(
+	fn func(context.Context, int) error,
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_host_category_delete")
+		logger.Info("centreon_host_category_delete", "id", in.ID)
+		if err := fn(ctx, in.ID); err != nil {
+			logger.Error("failed: centreon_host_category_delete", "error", err, "id", in.ID)
+			res, anyVal := errorResult("failed to delete host category %d: %v", in.ID, err)
+			return res, anyVal, nil
+		}
+		res, anyVal := successResult(logger, "centreon_host_category_delete", "Deleted host category %d", in.ID)
+		return res, anyVal, nil
+	}
+}
+
+func hostCategoryDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return hostCategoryDeleteHandlerFn(client.HostCategories.Delete, logger)
 }
 
 func hostSeverityListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {
