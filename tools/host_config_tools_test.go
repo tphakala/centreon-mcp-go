@@ -27,8 +27,12 @@ func TestHostCategoryGetHandlerFn_Success(t *testing.T) {
 	if res.IsError {
 		t.Errorf("expected success, got error: %v", res.Content)
 	}
-	if anyVal == nil {
-		t.Error("expected non-nil anyVal")
+	got, ok := anyVal.(*centreon.HostCategory)
+	if !ok {
+		t.Fatalf("expected *centreon.HostCategory, got %T", anyVal)
+	}
+	if got.ID != want.ID || got.Name != want.Name {
+		t.Errorf("expected %+v, got %+v", want, got)
 	}
 }
 
