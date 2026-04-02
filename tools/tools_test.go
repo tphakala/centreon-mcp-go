@@ -75,3 +75,37 @@ func TestBuildListOptions_ClampsMaxPageSize(t *testing.T) {
 		t.Error("expected at least one option")
 	}
 }
+
+func TestBuildListOptions_WrapsSearchWithWildcards(t *testing.T) {
+	in := ListInput{Search: "testmon"}
+	opts := buildListOptions(in)
+	// Should have limit + search = at least 2 options
+	if len(opts) < 2 {
+		t.Errorf("expected at least 2 options (limit + search), got %d", len(opts))
+	}
+}
+
+func TestBuildListOptions_DoesNotDoubleWrapWildcards(t *testing.T) {
+	in := ListInput{Search: "%testmon%"}
+	opts := buildListOptions(in)
+	if len(opts) < 2 {
+		t.Errorf("expected at least 2 options (limit + search), got %d", len(opts))
+	}
+}
+
+func TestBuildMonitoringListOptions_SkipsSearch(t *testing.T) {
+	in := ListInput{Search: "testmon", Limit: 10}
+	opts := buildMonitoringListOptions(in)
+	// Should only have limit option, search is skipped
+	if len(opts) != 1 {
+		t.Errorf("expected 1 option (limit only), got %d", len(opts))
+	}
+}
+
+func TestBuildMonitoringListOptions_SetsLimitAndPage(t *testing.T) {
+	in := ListInput{Page: 2, Limit: 10}
+	opts := buildMonitoringListOptions(in)
+	if len(opts) != 2 {
+		t.Errorf("expected 2 options (limit + page), got %d", len(opts))
+	}
+}

@@ -40,6 +40,13 @@ type ListInput struct {
 	Search string `json:"search,omitempty" jsonschema:"Filter by name (like match)"`
 }
 
+// MonitoringListInput is the input for monitoring list tools.
+// Monitoring endpoints do not support name search filtering.
+type MonitoringListInput struct {
+	Page  int `json:"page,omitempty"  jsonschema:"Page number (default 1)"`
+	Limit int `json:"limit,omitempty" jsonschema:"Results per page (default 30, max 100)"`
+}
+
 // IDInput is the common input for single-resource tools.
 type IDInput struct {
 	ID int `json:"id" jsonschema:"Resource ID"`
@@ -123,6 +130,8 @@ func errorResult(format string, args ...any) (res *mcp.CallToolResult, anyVal an
 }
 
 // buildListOptions converts a ListInput into centreon.ListOption slice.
+// Search terms are automatically wrapped with SQL wildcards (%) for
+// consistent LIKE matching across all configuration endpoints.
 func buildListOptions(in ListInput) []centreon.ListOption {
 	var opts []centreon.ListOption
 
@@ -139,7 +148,35 @@ func buildListOptions(in ListInput) []centreon.ListOption {
 		opts = append(opts, centreon.WithPage(in.Page))
 	}
 	if in.Search != "" {
-		opts = append(opts, centreon.WithSearch(centreon.Lk("name", in.Search)))
+		search := in.Search
+		if len(search) > 0 && search[0] != '%' {
+			search = "%" + search
+		}
+		if len(search) > 0 && search[len(search)-1] != '%' {
+			search = search + "%"
+		}
+		opts = append(opts, centreon.WithSearch(centreon.Lk("name", search)))
+	}
+	return opts
+}
+
+// buildMonitoringListOptions converts a ListInput into centreon.ListOption slice
+// for monitoring endpoints. Monitoring endpoints do not support the JSON search
+// filter format, so the search parameter is ignored.
+func buildMonitoringListOptions(in ListInput) []centreon.ListOption {
+	var opts []centreon.ListOption
+
+	limit := in.Limit
+	if limit <= 0 {
+		limit = defaultPageSize
+	}
+	if limit > maxPageSize {
+		limit = maxPageSize
+	}
+	opts = append(opts, centreon.WithLimit(limit))
+
+	if in.Page > 0 {
+		opts = append(opts, centreon.WithPage(in.Page))
 	}
 	return opts
 }
