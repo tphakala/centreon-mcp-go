@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server for Centreon monitoring, written in Go.
 
-Exposes 73 tools covering real-time monitoring, host and service configuration, downtime and acknowledgement management, infrastructure, users, and notifications. Integrates with any MCP-compatible AI client such as Claude Code or Claude Desktop.
+Exposes 75 tools covering real-time monitoring, host and service configuration, downtime and acknowledgement management, infrastructure, users, and notifications. Integrates with any MCP-compatible AI client such as Claude Code or Claude Desktop.
 
 ## Features
 
