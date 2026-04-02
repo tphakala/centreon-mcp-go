@@ -93,12 +93,12 @@ func monitoringHostGetHandler(client *centreon.Client, logger *slog.Logger) func
 	}
 }
 
-func monitoringHostServicesHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
+func monitoringHostServicesHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in MonitoringHostIDListInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in MonitoringHostIDListInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_monitoring_host_services")
 		logger.Debug("centreon_monitoring_host_services", "hostID", in.HostID, "page", in.Page, "limit", in.Limit)
-		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
-		opts := buildListOptions(listIn)
+		listIn := MonitoringListInput{Page: in.Page, Limit: in.Limit}
+		opts := buildMonitoringListOptions(listIn)
 		resp, err := client.MonitoringHosts.Services(ctx, in.HostID, opts...)
 		if err != nil {
 			logger.Error("failed: centreon_monitoring_host_services", "error", err, "hostID", in.HostID)
@@ -110,12 +110,12 @@ func monitoringHostServicesHandler(client *centreon.Client, logger *slog.Logger)
 	}
 }
 
-func monitoringHostTimelineHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
+func monitoringHostTimelineHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in MonitoringHostIDListInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in MonitoringHostIDListInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_monitoring_host_timeline")
 		logger.Debug("centreon_monitoring_host_timeline", "hostID", in.HostID, "page", in.Page, "limit", in.Limit)
-		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
-		opts := buildListOptions(listIn)
+		listIn := MonitoringListInput{Page: in.Page, Limit: in.Limit}
+		opts := buildMonitoringListOptions(listIn)
 		resp, err := client.MonitoringHosts.Timeline(ctx, in.HostID, opts...)
 		if err != nil {
 			logger.Error("failed: centreon_monitoring_host_timeline", "error", err, "hostID", in.HostID)

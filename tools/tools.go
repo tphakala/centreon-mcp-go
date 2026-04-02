@@ -47,6 +47,14 @@ type MonitoringListInput struct {
 	Limit int `json:"limit,omitempty" jsonschema:"Results per page (default 30, max 100)"`
 }
 
+// MonitoringHostIDListInput is the input for host-scoped monitoring list tools.
+// Monitoring endpoints do not support name search filtering.
+type MonitoringHostIDListInput struct {
+	HostID int `json:"hostID"           jsonschema:"Host ID"`
+	Page   int `json:"page,omitempty"   jsonschema:"Page number (default 1)"`
+	Limit  int `json:"limit,omitempty"  jsonschema:"Results per page (default 30, max 100)"`
+}
+
 // IDInput is the common input for single-resource tools.
 type IDInput struct {
 	ID int `json:"id" jsonschema:"Resource ID"`
