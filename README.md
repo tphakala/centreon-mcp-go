@@ -2,11 +2,11 @@
 
 An MCP (Model Context Protocol) server for Centreon monitoring, written in Go.
 
-Exposes 75 tools covering real-time monitoring, host and service configuration, downtime and acknowledgement management, infrastructure, users, and notifications. Integrates with any MCP-compatible AI client such as Claude Code or Claude Desktop.
+Exposes 86 tools covering real-time monitoring, host and service configuration, downtime and acknowledgement management, infrastructure, users, and notifications. Integrates with any MCP-compatible AI client such as Claude Code or Claude Desktop.
 
 ## Features
 
-- **73 tools** across 11 categories — monitoring, operations, downtimes, acknowledgements, host config, service config, infrastructure, users, notifications, platform status, and connection testing
+- **84 tools** across 11 categories — monitoring, operations, downtimes, acknowledgements, host config, service config, infrastructure, users, notifications, platform status, and connection testing
 - **Three transport modes** — stdio (default), HTTP (streamable), and HTTP gateway mode
 - **Structured JSON logging** via `log/slog` with configurable levels
 - **Gateway mode with token cache** — per-request Centreon credentials via HTTP headers, with a 50-minute token cache to avoid repeated logins
@@ -184,7 +184,7 @@ export AUTH_MODE=gateway
 | `status_tools.go`           | Platform status         | 1     | `centreon_platform_status`                                                        |
 | `connection_tools.go`       | Connection testing      | 1     | `centreon_connection_test`                                                        |
 
-**Total: 75 tools**
+**Total: 86 tools**
 
 ## Centreon API Permissions
 
