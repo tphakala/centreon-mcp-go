@@ -37,8 +37,8 @@ go build -o centreon-mcp-go .
 ### Container (Podman / Docker)
 
 ```bash
-# Build the image
-podman build -t centreon-mcp-go .
+# Build the image (or: task image:build)
+podman build -t centreon-mcp .
 
 # Run in HTTP mode
 podman run -d \
@@ -47,7 +47,7 @@ podman run -d \
   -e CENTREON_PASSWORD=secret \
   -e MCP_TRANSPORT=http \
   -p 8080:8080 \
-  centreon-mcp-go
+  centreon-mcp
 ```
 
 ## Configuration
@@ -178,13 +178,13 @@ export AUTH_MODE=gateway
 | `acknowledgement_tools.go`  | Acknowledgements        | 8     | `centreon_acknowledgement_list`, `centreon_acknowledgement_host_create`, `centreon_acknowledgement_service_cancel` |
 | `host_config_tools.go`      | Host configuration      | 13    | `centreon_host_create`, `centreon_host_group_list`, `centreon_host_template_list` |
 | `service_config_tools.go`   | Service configuration   | 13    | `centreon_service_create`, `centreon_service_group_list`, `centreon_service_template_list` |
-| `infra_tools.go`            | Infrastructure          | 5     | `centreon_server_list`, `centreon_command_list`, `centreon_time_period_create`    |
+| `infra_tools.go`            | Infrastructure          | 7     | `centreon_server_list`, `centreon_command_list`, `centreon_poller_apply`, `centreon_poller_apply_all` |
 | `user_tools.go`             | Users and contacts      | 6     | `centreon_user_list`, `centreon_contact_group_list`, `centreon_user_filter_create` |
 | `notification_tools.go`     | Notification policies   | 2     | `centreon_notification_policy_host_get`, `centreon_notification_policy_service_get` |
 | `status_tools.go`           | Platform status         | 1     | `centreon_platform_status`                                                        |
 | `connection_tools.go`       | Connection testing      | 1     | `centreon_connection_test`                                                        |
 
-**Total: 73 tools**
+**Total: 75 tools**
 
 ## Centreon API Permissions
 
