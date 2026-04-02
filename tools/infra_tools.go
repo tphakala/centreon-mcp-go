@@ -46,8 +46,7 @@ type TimePeriodDayInput struct {
 type CreateTimePeriodInput struct {
 	Name      string               `json:"name"                jsonschema:"Time period name"`
 	Alias     string               `json:"alias,omitempty"     jsonschema:"Time period alias"`
-	Days      []TimePeriodDayInput `json:"days"                jsonschema:"Day definitions (required, use empty array [] if none)"`
-	Templates []int                `json:"templates"           jsonschema:"Template IDs to include (required, use empty array [] if none)"`
+	Days []TimePeriodDayInput `json:"days" jsonschema:"Day definitions (required, use empty array [] if none)"`
 }
 
 func serverListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in ListInput) (*mcp.CallToolResult, any, error) {

@@ -65,8 +65,7 @@ func monitoringHostListHandler(client *centreon.Client, logger *slog.Logger) fun
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in MonitoringListInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_monitoring_host_list")
 		logger.Debug("centreon_monitoring_host_list", "page", in.Page, "limit", in.Limit)
-		listIn := ListInput{Page: in.Page, Limit: in.Limit}
-		opts := buildMonitoringListOptions(listIn)
+		opts := buildMonitoringListOptions(in)
 		resp, err := client.MonitoringHosts.List(ctx, opts...)
 		if err != nil {
 			logger.Error("failed: centreon_monitoring_host_list", "error", err)
@@ -147,8 +146,7 @@ func monitoringServiceListHandler(client *centreon.Client, logger *slog.Logger) 
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in MonitoringListInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_monitoring_service_list")
 		logger.Debug("centreon_monitoring_service_list", "page", in.Page, "limit", in.Limit)
-		listIn := ListInput{Page: in.Page, Limit: in.Limit}
-		opts := buildMonitoringListOptions(listIn)
+		opts := buildMonitoringListOptions(in)
 		resp, err := client.MonitoringServices.List(ctx, opts...)
 		if err != nil {
 			logger.Error("failed: centreon_monitoring_service_list", "error", err)
@@ -180,8 +178,7 @@ func monitoringResourceListHandler(client *centreon.Client, logger *slog.Logger)
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in MonitoringListInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_monitoring_resource_list")
 		logger.Debug("centreon_monitoring_resource_list", "page", in.Page, "limit", in.Limit)
-		listIn := ListInput{Page: in.Page, Limit: in.Limit}
-		opts := buildMonitoringListOptions(listIn)
+		opts := buildMonitoringListOptions(in)
 		resp, err := client.Monitoring.List(ctx, opts...)
 		if err != nil {
 			logger.Error("failed: centreon_monitoring_resource_list", "error", err)

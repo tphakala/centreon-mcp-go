@@ -93,17 +93,17 @@ func TestBuildListOptions_DoesNotDoubleWrapWildcards(t *testing.T) {
 	}
 }
 
-func TestBuildMonitoringListOptions_SkipsSearch(t *testing.T) {
-	in := ListInput{Search: "testmon", Limit: 10}
+func TestBuildMonitoringListOptions_OnlyLimitAndPage(t *testing.T) {
+	in := MonitoringListInput{Limit: 10}
 	opts := buildMonitoringListOptions(in)
-	// Should only have limit option, search is skipped
+	// Should only have limit option (no search field exists on MonitoringListInput)
 	if len(opts) != 1 {
 		t.Errorf("expected 1 option (limit only), got %d", len(opts))
 	}
 }
 
 func TestBuildMonitoringListOptions_SetsLimitAndPage(t *testing.T) {
-	in := ListInput{Page: 2, Limit: 10}
+	in := MonitoringListInput{Page: 2, Limit: 10}
 	opts := buildMonitoringListOptions(in)
 	if len(opts) != 2 {
 		t.Errorf("expected 2 options (limit + page), got %d", len(opts))

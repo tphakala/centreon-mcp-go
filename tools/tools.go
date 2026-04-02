@@ -160,10 +160,10 @@ func buildListOptions(in ListInput) []centreon.ListOption {
 	return opts
 }
 
-// buildMonitoringListOptions converts a ListInput into centreon.ListOption slice
+// buildMonitoringListOptions converts a MonitoringListInput into centreon.ListOption slice
 // for monitoring endpoints. Monitoring endpoints do not support the JSON search
-// filter format, so the search parameter is ignored.
-func buildMonitoringListOptions(in ListInput) []centreon.ListOption {
+// filter format, so the search parameter is not accepted.
+func buildMonitoringListOptions(in MonitoringListInput) []centreon.ListOption {
 	var opts []centreon.ListOption
 
 	limit := in.Limit
