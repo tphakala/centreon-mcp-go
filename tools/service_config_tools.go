@@ -16,9 +16,9 @@ func RegisterServiceConfigTools(s *mcp.Server, client *centreon.Client, logger *
 	}, serviceListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "centreon_service_get",
-		Description: "Get a single service configuration by ID.",
-	}, serviceGetHandler(client, logger))
+		Name:        "centreon_service_list_by_host",
+		Description: "List service configurations for a specific host. The services API does not support lookup by service ID; use this to find services by their parent host.",
+	}, serviceListByHostHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_create",
@@ -92,7 +92,6 @@ type CreateServiceInput struct {
 type UpdateServiceInput struct {
 	ID                  int     `json:"id"                              jsonschema:"Service ID"`
 	Name                *string `json:"name,omitempty"                  jsonschema:"Service name"`
-	Alias               *string `json:"alias,omitempty"                 jsonschema:"Service alias"`
 	CheckCommandID      *int    `json:"checkCommandID,omitempty"        jsonschema:"Check command ID"`
 	MaxCheckAttempts    *int    `json:"maxCheckAttempts,omitempty"      jsonschema:"Maximum check attempts"`
 	NormalCheckInterval *int    `json:"normalCheckInterval,omitempty"   jsonschema:"Normal check interval in seconds"`
@@ -119,18 +118,12 @@ func serviceListHandler(client *centreon.Client, logger *slog.Logger) func(ctx c
 	}
 }
 
-func serviceGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
-		ctx = centreon.WithToolName(ctx, "centreon_service_get")
-		logger.Debug("centreon_service_get", "id", in.ID)
-		svc, err := client.Services.GetByID(ctx, in.ID)
-		if err != nil {
-			logger.Error("failed: centreon_service_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get service %d: %v", in.ID, err)
-			return res, anyVal, nil
-		}
-		res, anyVal := jsonResult(svc)
-		return res, anyVal, nil
+func serviceListByHostHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in HostIDListInput) (*mcp.CallToolResult, any, error) {
+		listIn := ListInput{Page: in.Page, Limit: in.Limit, Search: in.Search}
+		return commonListHandler(ctx, logger, "centreon_service_list_by_host", listIn, func(ctx context.Context, opts ...centreon.ListOption) (*centreon.ListResponse[centreon.Service], error) {
+			return client.Services.ListByHost(ctx, in.HostID, opts...)
+		})
 	}
 }
 
@@ -170,7 +163,6 @@ func serviceUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 		logger.Info("centreon_service_update", "id", in.ID)
 		req := centreon.UpdateServiceRequest{
 			Name:                in.Name,
-			Alias:               in.Alias,
 			CheckCommandID:      in.CheckCommandID,
 			MaxCheckAttempts:    in.MaxCheckAttempts,
 			NormalCheckInterval: in.NormalCheckInterval,
