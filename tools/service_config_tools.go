@@ -92,7 +92,6 @@ type CreateServiceInput struct {
 type UpdateServiceInput struct {
 	ID                  int     `json:"id"                              jsonschema:"Service ID"`
 	Name                *string `json:"name,omitempty"                  jsonschema:"Service name"`
-	Alias               *string `json:"alias,omitempty"                 jsonschema:"Service alias"`
 	CheckCommandID      *int    `json:"checkCommandID,omitempty"        jsonschema:"Check command ID"`
 	MaxCheckAttempts    *int    `json:"maxCheckAttempts,omitempty"      jsonschema:"Maximum check attempts"`
 	NormalCheckInterval *int    `json:"normalCheckInterval,omitempty"   jsonschema:"Normal check interval in seconds"`
@@ -165,7 +164,6 @@ func serviceUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 		logger.Info("centreon_service_update", "id", in.ID)
 		req := centreon.UpdateServiceRequest{
 			Name:                in.Name,
-			Alias:               in.Alias,
 			CheckCommandID:      in.CheckCommandID,
 			MaxCheckAttempts:    in.MaxCheckAttempts,
 			NormalCheckInterval: in.NormalCheckInterval,
