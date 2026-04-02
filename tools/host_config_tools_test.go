@@ -160,3 +160,155 @@ func TestHostCategoryDeleteHandlerFn_Error(t *testing.T) {
 	}
 }
 
+// ---- Host Severity ----
+
+func TestHostSeverityGetHandlerFn_Success(t *testing.T) {
+	want := &centreon.HostSeverity{ID: 2, Name: "critical", Level: 1, IconID: 5}
+	fn := func(_ context.Context, id int) (*centreon.HostSeverity, error) {
+		if id != 2 {
+			t.Errorf("expected id=2, got %d", id)
+		}
+		return want, nil
+	}
+	handler := hostSeverityGetHandlerFn(fn, testLogger(t))
+	res, anyVal, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 2})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("expected success, got error: %v", res.Content)
+	}
+	got, ok := anyVal.(*centreon.HostSeverity)
+	if !ok {
+		t.Fatalf("expected *centreon.HostSeverity, got %T", anyVal)
+	}
+	if got.ID != want.ID || got.Name != want.Name {
+		t.Errorf("expected %+v, got %+v", want, got)
+	}
+}
+
+func TestHostSeverityGetHandlerFn_Error(t *testing.T) {
+	fn := func(_ context.Context, _ int) (*centreon.HostSeverity, error) {
+		return nil, errors.New("not found")
+	}
+	handler := hostSeverityGetHandlerFn(fn, testLogger(t))
+	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 99})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Error("expected error result")
+	}
+}
+
+func TestHostSeverityCreateHandlerFn_Success(t *testing.T) {
+	var calledReq centreon.CreateHostSeverityRequest
+	fn := func(_ context.Context, req centreon.CreateHostSeverityRequest) (int, error) {
+		calledReq = req
+		return 10, nil
+	}
+	handler := hostSeverityCreateHandlerFn(fn, testLogger(t))
+	in := CreateHostSeverityInput{Name: "high", Alias: "High", Level: 2, IconID: 3}
+	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("expected success, got error: %v", res.Content)
+	}
+	if calledReq.Name != "high" || calledReq.Level != 2 || calledReq.IconID != 3 {
+		t.Errorf("unexpected request: %+v", calledReq)
+	}
+	if calledReq.Alias != "High" {
+		t.Errorf("expected alias='High', got %q", calledReq.Alias)
+	}
+}
+
+func TestHostSeverityCreateHandlerFn_Error(t *testing.T) {
+	fn := func(_ context.Context, _ centreon.CreateHostSeverityRequest) (int, error) {
+		return 0, errors.New("duplicate")
+	}
+	handler := hostSeverityCreateHandlerFn(fn, testLogger(t))
+	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, CreateHostSeverityInput{Name: "x", Level: 1, IconID: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Error("expected error result")
+	}
+}
+
+func TestHostSeverityUpdateHandlerFn_Success(t *testing.T) {
+	var calledID int
+	var calledReq centreon.UpdateHostSeverityRequest
+	fn := func(_ context.Context, id int, req centreon.UpdateHostSeverityRequest) error {
+		calledID = id
+		calledReq = req
+		return nil
+	}
+	handler := hostSeverityUpdateHandlerFn(fn, testLogger(t))
+	in := UpdateHostSeverityInput{ID: 4, Name: "critical", Alias: "Critical", Level: 1, IconID: 7}
+	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("expected success, got error: %v", res.Content)
+	}
+	if calledID != 4 {
+		t.Errorf("expected calledID=4, got %d", calledID)
+	}
+	if calledReq.Level != 1 || calledReq.IconID != 7 {
+		t.Errorf("unexpected request: %+v", calledReq)
+	}
+	if calledReq.Name != "critical" || calledReq.Alias != "Critical" {
+		t.Errorf("unexpected name/alias: name=%q alias=%q", calledReq.Name, calledReq.Alias)
+	}
+}
+
+func TestHostSeverityUpdateHandlerFn_Error(t *testing.T) {
+	fn := func(_ context.Context, _ int, _ centreon.UpdateHostSeverityRequest) error {
+		return errors.New("not found")
+	}
+	handler := hostSeverityUpdateHandlerFn(fn, testLogger(t))
+	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, UpdateHostSeverityInput{ID: 1, Name: "x", Level: 1, IconID: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Error("expected error result")
+	}
+}
+
+func TestHostSeverityDeleteHandlerFn_Success(t *testing.T) {
+	var calledID int
+	fn := func(_ context.Context, id int) error {
+		calledID = id
+		return nil
+	}
+	handler := hostSeverityDeleteHandlerFn(fn, testLogger(t))
+	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 6})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("expected success, got error: %v", res.Content)
+	}
+	if calledID != 6 {
+		t.Errorf("expected calledID=6, got %d", calledID)
+	}
+}
+
+func TestHostSeverityDeleteHandlerFn_Error(t *testing.T) {
+	fn := func(_ context.Context, _ int) error {
+		return errors.New("in use")
+	}
+	handler := hostSeverityDeleteHandlerFn(fn, testLogger(t))
+	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 9})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Error("expected error result")
+	}
+}
