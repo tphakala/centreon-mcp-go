@@ -20,7 +20,7 @@ func TestHostCategoryGetHandlerFn_Success(t *testing.T) {
 		return want, nil
 	}
 	handler := hostCategoryGetHandlerFn(fn, testLogger(t))
-	res, anyVal, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 3})
+	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestHostCategoryGetHandlerFn_Error(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 	handler := hostCategoryGetHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 99})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 99})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestHostCategoryCreateHandlerFn_Success(t *testing.T) {
 		return 42, nil
 	}
 	handler := hostCategoryCreateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, CreateHostCategoryInput{Name: "web", Alias: "Web Servers"})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, CreateHostCategoryInput{Name: "web", Alias: "Web Servers"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestHostCategoryCreateHandlerFn_Error(t *testing.T) {
 		return 0, errors.New("duplicate")
 	}
 	handler := hostCategoryCreateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, CreateHostCategoryInput{Name: "x"})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, CreateHostCategoryInput{Name: "x"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestHostCategoryUpdateHandlerFn_Success(t *testing.T) {
 		return nil
 	}
 	handler := hostCategoryUpdateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, UpdateHostCategoryInput{ID: 8, Name: "linux", Alias: "Linux"})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, UpdateHostCategoryInput{ID: 8, Name: "linux", Alias: "Linux"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestHostCategoryUpdateHandlerFn_Error(t *testing.T) {
 		return errors.New("not found")
 	}
 	handler := hostCategoryUpdateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, UpdateHostCategoryInput{ID: 1, Name: "x"})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, UpdateHostCategoryInput{ID: 1, Name: "x"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestHostCategoryDeleteHandlerFn_Success(t *testing.T) {
 		return nil
 	}
 	handler := hostCategoryDeleteHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 11})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 11})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestHostCategoryDeleteHandlerFn_Error(t *testing.T) {
 		return errors.New("in use")
 	}
 	handler := hostCategoryDeleteHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 2})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestHostSeverityGetHandlerFn_Success(t *testing.T) {
 		return want, nil
 	}
 	handler := hostSeverityGetHandlerFn(fn, testLogger(t))
-	res, anyVal, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 2})
+	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestHostSeverityGetHandlerFn_Error(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 	handler := hostSeverityGetHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 99})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 99})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestHostSeverityCreateHandlerFn_Success(t *testing.T) {
 	}
 	handler := hostSeverityCreateHandlerFn(fn, testLogger(t))
 	in := CreateHostSeverityInput{Name: "high", Alias: "High", Level: 2, IconID: 3}
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, in)
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestHostSeverityCreateHandlerFn_Error(t *testing.T) {
 		return 0, errors.New("duplicate")
 	}
 	handler := hostSeverityCreateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, CreateHostSeverityInput{Name: "x", Level: 1, IconID: 1})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, CreateHostSeverityInput{Name: "x", Level: 1, IconID: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestHostSeverityUpdateHandlerFn_Success(t *testing.T) {
 	}
 	handler := hostSeverityUpdateHandlerFn(fn, testLogger(t))
 	in := UpdateHostSeverityInput{ID: 4, Name: "critical", Alias: "Critical", Level: 1, IconID: 7}
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, in)
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestHostSeverityUpdateHandlerFn_Error(t *testing.T) {
 		return errors.New("not found")
 	}
 	handler := hostSeverityUpdateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, UpdateHostSeverityInput{ID: 1, Name: "x", Level: 1, IconID: 1})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, UpdateHostSeverityInput{ID: 1, Name: "x", Level: 1, IconID: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestHostSeverityDeleteHandlerFn_Success(t *testing.T) {
 		return nil
 	}
 	handler := hostSeverityDeleteHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 6})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 6})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestHostSeverityDeleteHandlerFn_Error(t *testing.T) {
 		return errors.New("in use")
 	}
 	handler := hostSeverityDeleteHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 9})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 9})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

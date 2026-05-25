@@ -19,7 +19,7 @@ func TestServiceSeverityCreateHandlerFn_Success(t *testing.T) {
 	}
 	handler := serviceSeverityCreateHandlerFn(fn, testLogger(t))
 	in := CreateServiceSeverityInput{Name: "high", Alias: "High", Level: 2, IconID: 4}
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, in)
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestServiceSeverityCreateHandlerFn_Error(t *testing.T) {
 		return 0, errors.New("duplicate")
 	}
 	handler := serviceSeverityCreateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, CreateServiceSeverityInput{Name: "x", Level: 1, IconID: 1})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, CreateServiceSeverityInput{Name: "x", Level: 1, IconID: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestServiceSeverityUpdateHandlerFn_Success(t *testing.T) {
 	}
 	handler := serviceSeverityUpdateHandlerFn(fn, testLogger(t))
 	in := UpdateServiceSeverityInput{ID: 5, Name: "critical", Alias: "Critical", Level: 1, IconID: 9}
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, in)
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestServiceSeverityUpdateHandlerFn_Error(t *testing.T) {
 		return errors.New("not found")
 	}
 	handler := serviceSeverityUpdateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, UpdateServiceSeverityInput{ID: 1, Name: "x", Level: 1, IconID: 1})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, UpdateServiceSeverityInput{ID: 1, Name: "x", Level: 1, IconID: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestServiceSeverityDeleteHandlerFn_Success(t *testing.T) {
 		return nil
 	}
 	handler := serviceSeverityDeleteHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 7})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestServiceSeverityDeleteHandlerFn_Error(t *testing.T) {
 		return errors.New("in use")
 	}
 	handler := serviceSeverityDeleteHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 3})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

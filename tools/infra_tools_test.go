@@ -36,7 +36,7 @@ func (s *pollerApplyStub) generateAndReloadAll(_ context.Context) error {
 func TestPollerApplyHandler_Success(t *testing.T) {
 	stub := &pollerApplyStub{}
 	handler := pollerApplyHandlerFn(stub.generateAndReload, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, PollerApplyInput{PollerID: 42})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, PollerApplyInput{PollerID: 42})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestPollerApplyHandler_Success(t *testing.T) {
 func TestPollerApplyHandler_Error(t *testing.T) {
 	stub := &pollerApplyStub{applyErr: errors.New("server down")}
 	handler := pollerApplyHandlerFn(stub.generateAndReload, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, PollerApplyInput{PollerID: 1})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, PollerApplyInput{PollerID: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestPollerApplyHandler_Error(t *testing.T) {
 func TestPollerApplyAllHandler_Success(t *testing.T) {
 	stub := &pollerApplyStub{}
 	handler := pollerApplyAllHandlerFn(stub.generateAndReloadAll, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, struct{}{})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, struct{}{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestPollerApplyAllHandler_Success(t *testing.T) {
 func TestPollerApplyAllHandler_Error(t *testing.T) {
 	stub := &pollerApplyStub{applyAllErr: errors.New("timeout")}
 	handler := pollerApplyAllHandlerFn(stub.generateAndReloadAll, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, struct{}{})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, struct{}{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestTimePeriodUpdateHandlerFn_Success(t *testing.T) {
 		Days:      []TimePeriodDayInput{{Day: 1, TimeRange: "08:00-17:00"}},
 		Templates: []int{1, 2},
 	}
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, in)
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestTimePeriodUpdateHandlerFn_Error(t *testing.T) {
 		return errors.New("not found")
 	}
 	handler := timePeriodUpdateHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, UpdateTimePeriodInput{ID: 1, Name: "x", Days: nil})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, UpdateTimePeriodInput{ID: 1, Name: "x", Days: nil})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestTimePeriodDeleteHandlerFn_Success(t *testing.T) {
 		return nil
 	}
 	handler := timePeriodDeleteHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 5})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 5})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestTimePeriodDeleteHandlerFn_Error(t *testing.T) {
 		return errors.New("in use")
 	}
 	handler := timePeriodDeleteHandlerFn(fn, testLogger(t))
-	res, _, err := handler(context.Background(), &mcp.CallToolRequest{}, IDInput{ID: 3})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
