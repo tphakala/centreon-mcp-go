@@ -2,11 +2,11 @@
 
 An MCP (Model Context Protocol) server for Centreon monitoring, written in Go.
 
-Exposes 75 tools covering real-time monitoring, host and service configuration, downtime and acknowledgement management, infrastructure, users, and notifications. Integrates with any MCP-compatible AI client such as Claude Code or Claude Desktop.
+Exposes 88 tools covering real-time monitoring, host and service configuration, downtime and acknowledgement management, infrastructure, users, and notifications. Integrates with any MCP-compatible AI client such as Claude Code or Claude Desktop.
 
 ## Features
 
-- **73 tools** across 11 categories — monitoring, operations, downtimes, acknowledgements, host config, service config, infrastructure, users, notifications, platform status, and connection testing
+- **88 tools** across 11 categories — monitoring, operations, downtimes, acknowledgements, host config, service config, infrastructure, users, notifications, platform status, and connection testing
 - **Three transport modes** — stdio (default), HTTP (streamable), and HTTP gateway mode
 - **Structured JSON logging** via `log/slog` with configurable levels
 - **Gateway mode with token cache** — per-request Centreon credentials via HTTP headers, with a 50-minute token cache to avoid repeated logins
@@ -176,15 +176,15 @@ export AUTH_MODE=gateway
 | `operations_tools.go`       | Bulk resource operations| 5     | `centreon_resource_acknowledge`, `centreon_resource_downtime`, `centreon_resource_check` |
 | `downtime_tools.go`         | Downtime management     | 9     | `centreon_downtime_list`, `centreon_downtime_host_create`, `centreon_downtime_service_cancel` |
 | `acknowledgement_tools.go`  | Acknowledgements        | 8     | `centreon_acknowledgement_list`, `centreon_acknowledgement_host_create`, `centreon_acknowledgement_service_cancel` |
-| `host_config_tools.go`      | Host configuration      | 13    | `centreon_host_create`, `centreon_host_group_list`, `centreon_host_template_list` |
-| `service_config_tools.go`   | Service configuration   | 13    | `centreon_service_create`, `centreon_service_group_list`, `centreon_service_template_list` |
-| `infra_tools.go`            | Infrastructure          | 7     | `centreon_server_list`, `centreon_command_list`, `centreon_poller_apply`, `centreon_poller_apply_all` |
+| `host_config_tools.go`      | Host configuration      | 21    | `centreon_host_create`, `centreon_host_group_list`, `centreon_host_template_list` |
+| `service_config_tools.go`   | Service configuration   | 16    | `centreon_service_create`, `centreon_service_group_list`, `centreon_service_template_list` |
+| `infra_tools.go`            | Infrastructure          | 9     | `centreon_server_list`, `centreon_command_list`, `centreon_poller_apply`, `centreon_poller_apply_all` |
 | `user_tools.go`             | Users and contacts      | 6     | `centreon_user_list`, `centreon_contact_group_list`, `centreon_user_filter_create` |
 | `notification_tools.go`     | Notification policies   | 2     | `centreon_notification_policy_host_get`, `centreon_notification_policy_service_get` |
 | `status_tools.go`           | Platform status         | 1     | `centreon_platform_status`                                                        |
 | `connection_tools.go`       | Connection testing      | 1     | `centreon_connection_test`                                                        |
 
-**Total: 75 tools**
+**Total: 88 tools**
 
 ## Centreon API Permissions
 

@@ -48,8 +48,8 @@ func LoadConfig() (Config, error) {
 	cfg.LogLevel = envOr("LOG_LEVEL", "info")
 	cfg.AuthMode = envOr("AUTH_MODE", "env")
 
-	switch cfg.Transport { //nolint:goconst // validation uses literal values
-	case "stdio", "http":
+	switch cfg.Transport {
+	case "stdio", transportHTTP:
 	default:
 		return Config{}, fmt.Errorf("invalid MCP_TRANSPORT value %q: expected stdio/http", cfg.Transport)
 	}
