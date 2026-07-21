@@ -12,7 +12,8 @@ import (
 func RegisterConnectionTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_connection_test",
-		Description: "Test connectivity to the Centreon API by performing a lightweight status check.",
+		Description: "Verify that the configured Centreon API credentials authenticate and the API is reachable by fetching host status counts. Takes no arguments; call this first to confirm connectivity before using other tools. Read-only.",
+		Annotations: readOnlyTool("Test connection"),
 	}, connectionTestHandler(client, logger))
 }
 

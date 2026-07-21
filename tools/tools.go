@@ -33,6 +33,27 @@ func RegisterAll(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	RegisterConnectionTools(s, client, logger)
 }
 
+// readOnlyTool annotates a tool that only reads from the Centreon API (open world).
+// DestructiveHint is set false explicitly (redundant under ReadOnlyHint, but unambiguous for scanners).
+func readOnlyTool(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, DestructiveHint: new(false), OpenWorldHint: new(true)}
+}
+
+// createTool annotates a tool that additively creates a record or submits an additive action.
+func createTool(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{Title: title, DestructiveHint: new(false), IdempotentHint: false, OpenWorldHint: new(true)}
+}
+
+// updateTool annotates a tool that overwrites an existing record or applies configuration changes.
+func updateTool(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{Title: title, DestructiveHint: new(true), IdempotentHint: true, OpenWorldHint: new(true)}
+}
+
+// deleteTool annotates a tool that deletes a record or cancels a scheduled action.
+func deleteTool(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{Title: title, DestructiveHint: new(true), IdempotentHint: true, OpenWorldHint: new(true)}
+}
+
 // ListInput is the common input for list tools.
 type ListInput struct {
 	Page   int    `json:"page,omitempty"   jsonschema:"Page number (default 1)"`
