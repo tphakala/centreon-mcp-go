@@ -12,107 +12,128 @@ import (
 func RegisterHostConfigTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_list",
-		Description: "List host configurations. Supports pagination and name filtering.",
+		Description: "Retrieve a paginated list of configured hosts (the machines and devices Centreon monitors) with their IDs, names, and addresses. Use this to discover host IDs or browse the inventory; for one host's full configuration by ID use centreon_host_get, and for live up/down state use centreon_monitoring_host_list. Supports page (default 1), limit (default 30, max 100), and name search, and returns stored configuration only. Read-only.",
+		Annotations: readOnlyTool("List hosts"),
 	}, hostListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_get",
-		Description: "Get a single host configuration by ID.",
+		Description: "Fetch the full stored configuration of a single host by its numeric ID, including address, templates, groups, categories, and check settings. Use this when you already know the host ID; to search or page through hosts use centreon_host_list, and for current up/down monitoring state use centreon_monitoring_host_get. Requires id and returns configuration only, never live status. Read-only.",
+		Annotations: readOnlyTool("Get host"),
 	}, hostGetHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_create",
-		Description: "Create a new host configuration.",
+		Description: "Define a new host by attaching it to a monitoring server with a name and an IP address or FQDN, plus optional templates, groups, categories, and macros. Use this to add a machine to monitoring; to change an existing host use centreon_host_update, and to remove one use centreon_host_delete. Requires monitoringServerID, name, and address, and the new host stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: createTool("Create host"),
 	}, hostCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_update",
-		Description: "Update an existing host configuration (partial update).",
+		Description: "Modify selected fields of an existing host such as name, address, check command, check intervals, or activation, leaving unspecified fields untouched. Use this to edit a host previously added with centreon_host_create; to create a host use centreon_host_create and to remove one use centreon_host_delete. Requires id, applies a partial update, and the change stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: updateTool("Update host"),
 	}, hostUpdateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_delete",
-		Description: "Delete a host configuration by ID.",
+		Description: "Permanently remove a host from the configuration by its numeric ID. Use this to decommission a machine; to change it instead of removing it use centreon_host_update, and to inspect it first use centreon_host_get. Requires id, and the deletion stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: deleteTool("Delete host"),
 	}, hostDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_group_list",
-		Description: "List host group configurations. Supports pagination and name filtering.",
+		Description: "Retrieve a paginated list of host groups, the named collections that bundle related hosts together for dashboards and filtering. Use this to discover host group IDs; for one group's details by ID use centreon_host_group_get. Supports page (default 1), limit (default 30, max 100), and name search, and returns stored configuration only. Read-only.",
+		Annotations: readOnlyTool("List host groups"),
 	}, hostGroupListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_group_get",
-		Description: "Get a single host group configuration by ID.",
+		Description: "Fetch the stored configuration of a single host group by its numeric ID, including its name and alias. Use this when you already know the group ID; to search or page through host groups use centreon_host_group_list. Requires id and returns configuration only. Read-only.",
+		Annotations: readOnlyTool("Get host group"),
 	}, hostGroupGetHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_group_create",
-		Description: "Create a new host group configuration.",
+		Description: "Define a new host group, a named container for organizing hosts, with a name and optional alias. Use this to add a grouping; to rename an existing group use centreon_host_group_update, and to remove one use centreon_host_group_delete. Requires name, and the new group stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: createTool("Create host group"),
 	}, hostGroupCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_group_update",
-		Description: "Replace an existing host group configuration (full update).",
+		Description: "Overwrite the name and alias of an existing host group identified by its numeric ID. Use this to rename or re-describe a group added with centreon_host_group_create; to create a group use centreon_host_group_create and to remove one use centreon_host_group_delete. Requires id and name, replaces both fields, and the change stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: updateTool("Update host group"),
 	}, hostGroupUpdateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_group_delete",
-		Description: "Delete a host group configuration by ID.",
+		Description: "Remove a host group by its numeric ID, dissolving the grouping while leaving the member hosts in place. Use this to drop an unused collection; to rename it instead use centreon_host_group_update, and to inspect it first use centreon_host_group_get. Requires id, and the deletion stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: deleteTool("Delete host group"),
 	}, hostGroupDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_category_list",
-		Description: "List host category configurations. Supports pagination and name filtering.",
+		Description: "Retrieve a paginated list of host categories, the classification tags used to label and organize hosts independently of host groups. Use this to discover category IDs; for one category's details by ID use centreon_host_category_get. Supports page (default 1), limit (default 30, max 100), and name search, and returns stored configuration only. Read-only.",
+		Annotations: readOnlyTool("List host categories"),
 	}, hostCategoryListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_category_get",
-		Description: "Get a single host category configuration by ID.",
+		Description: "Fetch the stored configuration of a single host category by its numeric ID, including its name and alias. Use this when you already know the category ID; to search or page through categories use centreon_host_category_list. Requires id and returns configuration only. Read-only.",
+		Annotations: readOnlyTool("Get host category"),
 	}, hostCategoryGetHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_category_create",
-		Description: "Create a new host category configuration.",
+		Description: "Define a new host category, a label for classifying hosts, with a name and optional alias. Use this to add a classification; to rename an existing category use centreon_host_category_update, and to remove one use centreon_host_category_delete. Requires name, and the new category stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: createTool("Create host category"),
 	}, hostCategoryCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_category_update",
-		Description: "Replace an existing host category configuration (full update).",
+		Description: "Overwrite the name and alias of an existing host category identified by its numeric ID. Use this to relabel a category added with centreon_host_category_create; to create a category use centreon_host_category_create and to remove one use centreon_host_category_delete. Requires id and name, replaces both fields, and the change stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: updateTool("Update host category"),
 	}, hostCategoryUpdateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_category_delete",
-		Description: "Delete a host category configuration by ID.",
+		Description: "Remove a host category by its numeric ID, unassigning that label from any hosts that carried it. Use this to drop an unused classification; to rename it instead use centreon_host_category_update, and to inspect it first use centreon_host_category_get. Requires id, and the deletion stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: deleteTool("Delete host category"),
 	}, hostCategoryDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_severity_list",
-		Description: "List host severity configurations. Supports pagination and name filtering.",
+		Description: "Retrieve a paginated list of host severities, the ranked priority levels (each carrying a level value and an icon) that mark how critical a host is. Use this to discover severity IDs; for one severity's details by ID use centreon_host_severity_get. Supports page (default 1), limit (default 30, max 100), and name search, and returns stored configuration only. Read-only.",
+		Annotations: readOnlyTool("List host severities"),
 	}, hostSeverityListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_severity_get",
-		Description: "Get a single host severity configuration by ID.",
+		Description: "Fetch the stored configuration of a single host severity by its numeric ID, including its name, level, and icon. Use this when you already know the severity ID; to search or page through severities use centreon_host_severity_list. Requires id and returns configuration only. Read-only.",
+		Annotations: readOnlyTool("Get host severity"),
 	}, hostSeverityGetHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_severity_create",
-		Description: "Create a new host severity configuration.",
+		Description: "Define a new host severity, a priority tier with a name, a numeric level where lower is more severe, and an icon. Use this to add a ranking tier; to change an existing severity use centreon_host_severity_update, and to remove one use centreon_host_severity_delete. Requires name, level, and iconID, and the new severity stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: createTool("Create host severity"),
 	}, hostSeverityCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_severity_update",
-		Description: "Replace an existing host severity configuration (full update).",
+		Description: "Overwrite the name, alias, level, and icon of an existing host severity identified by its numeric ID. Use this to re-rank a severity added with centreon_host_severity_create; to create a severity use centreon_host_severity_create and to remove one use centreon_host_severity_delete. Requires id, name, level, and iconID, replaces those fields, and the change stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: updateTool("Update host severity"),
 	}, hostSeverityUpdateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_severity_delete",
-		Description: "Delete a host severity configuration by ID.",
+		Description: "Remove a host severity by its numeric ID, clearing that priority tier from any hosts assigned to it. Use this to drop an unused tier; to re-rank it instead use centreon_host_severity_update, and to inspect it first use centreon_host_severity_get. Requires id, and the deletion stays configuration-only until pushed live with centreon_poller_apply. Writes to Centreon.",
+		Annotations: deleteTool("Delete host severity"),
 	}, hostSeverityDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_template_list",
-		Description: "List host template configurations. Supports pagination and name filtering.",
+		Description: "Retrieve a paginated list of host templates, the reusable blueprints that hosts inherit checks, macros, and settings from. Use this to find template IDs to pass in the templates field of centreon_host_create; this server exposes host templates as a read-only listing with no get, create, update, or delete counterpart. Supports page (default 1), limit (default 30, max 100), and name search, and returns stored configuration only. Read-only.",
+		Annotations: readOnlyTool("List host templates"),
 	}, hostTemplateListHandler(client, logger))
 }
 
@@ -126,14 +147,14 @@ type MacroInput struct {
 
 // CreateHostInput is the input for the centreon_host_create tool.
 type CreateHostInput struct {
-	MonitoringServerID int    `json:"monitoringServerID"         jsonschema:"Monitoring server ID"`
-	Name               string `json:"name"                       jsonschema:"Host name"`
-	Address            string `json:"address"                    jsonschema:"Host IP address or FQDN"`
-	Alias              string `json:"alias,omitempty"            jsonschema:"Host alias"`
-	CheckCommandID     int    `json:"checkCommandID,omitempty"   jsonschema:"Check command ID"`
-	Templates          []int  `json:"templates,omitempty"        jsonschema:"Host template IDs to inherit services and config from"`
-	Groups             []int  `json:"groups,omitempty"           jsonschema:"Host group IDs"`
-	Categories         []int  `json:"categories,omitempty"       jsonschema:"Host category IDs"`
+	MonitoringServerID int          `json:"monitoringServerID"         jsonschema:"Monitoring server ID"`
+	Name               string       `json:"name"                       jsonschema:"Host name"`
+	Address            string       `json:"address"                    jsonschema:"Host IP address or FQDN"`
+	Alias              string       `json:"alias,omitempty"            jsonschema:"Host alias"`
+	CheckCommandID     int          `json:"checkCommandID,omitempty"   jsonschema:"Check command ID"`
+	Templates          []int        `json:"templates,omitempty"        jsonschema:"Host template IDs to inherit services and config from"`
+	Groups             []int        `json:"groups,omitempty"           jsonschema:"Host group IDs"`
+	Categories         []int        `json:"categories,omitempty"       jsonschema:"Host category IDs"`
 	Macros             []MacroInput `json:"macros,omitempty"     jsonschema:"Custom macros"`
 }
 

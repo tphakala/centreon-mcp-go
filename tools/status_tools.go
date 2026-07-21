@@ -10,16 +10,17 @@ import (
 
 // PlatformStatus combines host status counts, service status counts, and monitoring servers.
 type PlatformStatus struct {
-	Hosts    *centreon.HostStatusCount                              `json:"hosts"`
-	Services *centreon.ServiceStatusCount                           `json:"services"`
-	Servers  *centreon.ListResponse[centreon.MonitoringServer]      `json:"servers"`
+	Hosts    *centreon.HostStatusCount                         `json:"hosts"`
+	Services *centreon.ServiceStatusCount                      `json:"services"`
+	Servers  *centreon.ListResponse[centreon.MonitoringServer] `json:"servers"`
 }
 
 // RegisterStatusTools registers all platform status tools.
 func RegisterStatusTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_platform_status",
-		Description: "Get a combined platform overview: host status counts, service status counts, and monitoring servers.",
+		Description: "Return a combined live platform overview in one call: host status counts (up/down/unreachable), service status counts (ok/warning/critical/unknown), and the list of monitoring servers. Use this for an at-a-glance health snapshot; for the individual pieces use centreon_monitoring_host_status_counts, centreon_monitoring_service_status_counts, or centreon_server_list. Read-only.",
+		Annotations: readOnlyTool("Platform status"),
 	}, platformStatusHandler(client, logger))
 }
 

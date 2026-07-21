@@ -6,11 +6,11 @@ Exposes 88 tools covering real-time monitoring, host and service configuration, 
 
 ## Features
 
-- **88 tools** across 11 categories — monitoring, operations, downtimes, acknowledgements, host config, service config, infrastructure, users, notifications, platform status, and connection testing
-- **Three transport modes** — stdio (default), HTTP (streamable), and HTTP gateway mode
+- **88 tools** across 11 categories: monitoring, operations, downtimes, acknowledgements, host config, service config, infrastructure, users, notifications, platform status, and connection testing
+- **Three transport modes**: stdio (default), HTTP (streamable), and HTTP gateway mode
 - **Structured JSON logging** via `log/slog` with configurable levels
-- **Gateway mode with token cache** — per-request Centreon credentials via HTTP headers, with a 50-minute token cache to avoid repeated logins
-- **Self-signed certificate support** — opt-in via `CENTREON_ALLOW_SELF_SIGNED`
+- **Gateway mode with token cache**: per-request Centreon credentials via HTTP headers, with a 50-minute token cache to avoid repeated logins
+- **Self-signed certificate support**: opt-in via `CENTREON_ALLOW_SELF_SIGNED`
 
 ## Requirements
 
@@ -56,10 +56,10 @@ All configuration is via environment variables.
 
 | Variable                    | Required | Default     | Description                                                  |
 |-----------------------------|----------|-------------|--------------------------------------------------------------|
-| `CENTREON_HOST`             | Yes      | —           | Centreon server base URL (e.g. `https://centreon.example.com`) |
-| `CENTREON_USERNAME`         | *        | —           | Username for session-based authentication                    |
-| `CENTREON_PASSWORD`         | *        | —           | Password for session-based authentication                    |
-| `CENTREON_TOKEN`            | *        | —           | API token (alternative to username + password)               |
+| `CENTREON_HOST`             | Yes      | (none)      | Centreon server base URL (e.g. `https://centreon.example.com`) |
+| `CENTREON_USERNAME`         | *        | (none)      | Username for session-based authentication                    |
+| `CENTREON_PASSWORD`         | *        | (none)      | Password for session-based authentication                    |
+| `CENTREON_TOKEN`            | *        | (none)      | API token (alternative to username + password)               |
 | `CENTREON_ALLOW_SELF_SIGNED`| No       | `false`     | Accept self-signed TLS certificates                          |
 | `MCP_TRANSPORT`             | No       | `stdio`     | Transport mode: `stdio` or `http`                            |
 | `MCP_HTTP_PORT`             | No       | `8080`      | HTTP listen port (HTTP transport only)                       |
@@ -106,7 +106,7 @@ To use an API token instead:
 
 ## Usage with Claude Desktop
 
-Add the server to `claude_desktop_config.json` (location varies by OS — check the Claude Desktop documentation):
+Add the server to `claude_desktop_config.json` (location varies by OS, so check the Claude Desktop documentation):
 
 ```json
 {
@@ -149,7 +149,7 @@ Configure your MCP client to connect to `http://localhost:8080/mcp`.
 
 Gateway mode is for multi-tenant or shared deployments where each request carries its own Centreon credentials. The server creates a per-request Centreon client authenticated with the supplied credentials.
 
-Enable it with `AUTH_MODE=gateway` alongside `MCP_TRANSPORT=http`. In this mode, `CENTREON_HOST`, `CENTREON_USERNAME`, `CENTREON_PASSWORD`, and `CENTREON_TOKEN` are not required at startup — they are provided per request via HTTP headers.
+Enable it with `AUTH_MODE=gateway` alongside `MCP_TRANSPORT=http`. In this mode, `CENTREON_HOST`, `CENTREON_USERNAME`, `CENTREON_PASSWORD`, and `CENTREON_TOKEN` are not required at startup; they are provided per request via HTTP headers.
 
 | Header                  | Description                                         |
 |-------------------------|-----------------------------------------------------|
@@ -205,7 +205,7 @@ This project uses [Task](https://taskfile.dev) for development commands.
 | Command          | Description                                   |
 |------------------|-----------------------------------------------|
 | `task check`     | Run all local checks: fmt, tidy, vet, lint, test |
-| `task ci`        | Full CI pipeline — check then build           |
+| `task ci`        | Full CI pipeline: check then build            |
 | `task go:build`  | Build the binary                              |
 | `task go:run`    | Run the server in stdio mode                  |
 | `task go:test`   | Run tests with race detector                  |

@@ -56,7 +56,7 @@
 
 Additionally, `ResourceRef` (operations.go:9-13) uses `"parent,omitempty"` which omits parent for hosts, but the API requires `"parent": null` for hosts.
 
-**Fix required in**: `centreon-go-client` — restructure all operation request structs with wrapper objects, and always include `parent` (null for hosts).
+**Fix required in**: `centreon-go-client`: restructure all operation request structs with wrapper objects, and always include `parent` (null for hosts).
 
 ---
 
@@ -96,12 +96,12 @@ The `with_services` field lacks `omitempty`, so even when `false` it's included 
 | `centreon_user_update` | `PATCH /centreon/api/latest/users/{id}` | 404 |
 
 **Code locations** (centreon-go-client):
-- `users.go:34` — `/users`
-- `contact_groups.go:25` — `/users/contact-groups`
-- `contact_templates.go:24` — `/users/contact-templates`
-- `user_filters.go:49` — `/users/filters`
+- `users.go:34`: `/users`
+- `contact_groups.go:25`: `/users/contact-groups`
+- `contact_templates.go:24`: `/users/contact-templates`
+- `user_filters.go:49`: `/users/filters`
 
-**Fix required in**: `centreon-go-client` — correct the API endpoint paths. These may need to be under `/configuration/users` or similar depending on the Centreon API version.
+**Fix required in**: `centreon-go-client`: correct the API endpoint paths. These may need to be under `/configuration/users` or similar depending on the Centreon API version.
 
 ---
 
@@ -140,7 +140,7 @@ The Centreon API requires `days` (array of day/time_range objects) and `template
 
 **Error**: `HTTP 400: The property alias is not defined and the definition does not allow additional properties`
 
-**Code location**: `tools/service_tools.go` — `ServiceUpdateInput` struct includes `Alias` field, but the Centreon service update API does not accept `alias`.
+**Code location**: `tools/service_tools.go`: `ServiceUpdateInput` struct includes `Alias` field, but the Centreon service update API does not accept `alias`.
 
 ---
 
@@ -158,7 +158,7 @@ The Centreon API requires `days` (array of day/time_range objects) and `template
 
 The search parameter uses `Lk("name", ...)` which generates `{"name": {"$lk": "..."}}`. The monitoring host list endpoint does not accept this search format.
 
-**Code location**: `tools/tools.go:141-143` — `buildListOptions()` applies the same search strategy to all endpoints, but monitoring endpoints have different search parameter support.
+**Code location**: `tools/tools.go:141-143`: `buildListOptions()` applies the same search strategy to all endpoints, but monitoring endpoints have different search parameter support.
 
 ---
 

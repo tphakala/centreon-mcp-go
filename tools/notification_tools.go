@@ -12,12 +12,14 @@ import (
 func RegisterNotificationTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_notification_policy_host_get",
-		Description: "Get the notification policy for a specific host.",
+		Description: "Fetch the configured notification policy for one host identified by its numeric hostID, reporting whether notifications are enabled and which users and contact groups receive them. Use this for a host; for a specific service on that host use centreon_notification_policy_service_get, and to resolve the referenced recipients use centreon_user_list or centreon_contact_group_list. Reads stored configuration, not live monitoring state. Read-only.",
+		Annotations: readOnlyTool("Get host notification policy"),
 	}, notificationPolicyHostGetHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_notification_policy_service_get",
-		Description: "Get the notification policy for a specific service on a host.",
+		Description: "Fetch the configured notification policy for one service, identified by both its numeric hostID and serviceID, reporting whether notifications are enabled and which users and contact groups receive them. Use this for a service; for the host-level policy use centreon_notification_policy_host_get, and to resolve the referenced recipients use centreon_user_list or centreon_contact_group_list. Reads stored configuration, not live monitoring state. Read-only.",
+		Annotations: readOnlyTool("Get service notification policy"),
 	}, notificationPolicyServiceGetHandler(client, logger))
 }
 

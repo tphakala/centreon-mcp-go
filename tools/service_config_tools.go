@@ -12,82 +12,98 @@ import (
 func RegisterServiceConfigTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_list",
-		Description: "List service configurations. Supports pagination and name filtering.",
+		Description: "Retrieve stored service configuration records across all hosts, with optional name search and pagination. Use this to inventory configured services; for live runtime status call centreon_monitoring_service_list instead, and to restrict the listing to one host use centreon_service_list_by_host. Returns page 1 with 30 results by default (maximum 100 per page) and reflects saved configuration only. Read-only.",
+		Annotations: readOnlyTool("List services"),
 	}, serviceListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_list_by_host",
-		Description: "List service configurations for a specific host. The services API does not support lookup by service ID; use this to find services by their parent host.",
+		Description: "List the stored service configurations attached to one host, identified by its hostID, with optional name search and pagination. Use this instead of centreon_service_list when you already know the parent host, and as the way to locate a specific service since the services configuration API cannot look one up by service ID. Returns page 1 with 30 results by default (maximum 100 per page) and reflects saved configuration, not live monitoring. Read-only.",
+		Annotations: readOnlyTool("List services by host"),
 	}, serviceListByHostHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_create",
-		Description: "Create a new service configuration.",
+		Description: "Add a new service configuration to a host, requiring the parent hostID and a service name, and optionally inheriting settings from a service template plus a check command, service groups, categories, and custom macros. Use this to define a service; to change an existing one call centreon_service_update, and to remove one call centreon_service_delete. The service is saved to configuration only and does not begin monitoring until centreon_poller_apply pushes the change to the pollers. Writes to Centreon.",
+		Annotations: createTool("Create service"),
 	}, serviceCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_update",
-		Description: "Update an existing service configuration (partial update).",
+		Description: "Modify selected fields of an existing service configuration identified by its id, such as name, check command, check intervals, active-check mode, or activation, leaving unspecified fields unchanged. Use this to adjust a service already created with centreon_service_create; to add a new one use that tool and to remove one use centreon_service_delete. This is a partial update saved to configuration only, taking effect after centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: updateTool("Update service"),
 	}, serviceUpdateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_delete",
-		Description: "Delete a service configuration by ID.",
+		Description: "Permanently remove a service configuration identified by its id. Use this to delete a service defined with centreon_service_create; to change one without removing it use centreon_service_update instead. The deletion is applied to configuration only and takes effect once centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: deleteTool("Delete service"),
 	}, serviceDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_group_list",
-		Description: "List service group configurations. Supports pagination and name filtering.",
+		Description: "List stored service group configurations, the named collections that bundle services together, with optional name search and pagination. Use this rather than centreon_service_list, which returns individual services; create a group with centreon_service_group_create and remove one with centreon_service_group_delete. Returns page 1 with 30 results by default (maximum 100 per page) and reflects saved configuration only. Read-only.",
+		Annotations: readOnlyTool("List service groups"),
 	}, serviceGroupListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_group_create",
-		Description: "Create a new service group configuration.",
+		Description: "Define a new service group, a named collection of services, requiring a group name and accepting an optional alias. Use this for grouping rather than centreon_service_create, which defines an individual service; list existing groups with centreon_service_group_list and remove one with centreon_service_group_delete. The group is saved to configuration only and takes effect after centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: createTool("Create service group"),
 	}, serviceGroupCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_group_delete",
-		Description: "Delete a service group configuration by ID.",
+		Description: "Remove a service group configuration identified by its id, deleting the grouping without affecting the member services themselves. Use this to undo a group created with centreon_service_group_create; to review existing groups first call centreon_service_group_list. The deletion is saved to configuration only and takes effect once centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: deleteTool("Delete service group"),
 	}, serviceGroupDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_category_list",
-		Description: "List service category configurations. Supports pagination and name filtering.",
+		Description: "List stored service category configurations, the labels used to classify services for filtering and reporting, with optional name search and pagination. Use this rather than centreon_service_group_list, which returns groupings of services; create a category with centreon_service_category_create and remove one with centreon_service_category_delete. Returns page 1 with 30 results by default (maximum 100 per page) and reflects saved configuration only. Read-only.",
+		Annotations: readOnlyTool("List service categories"),
 	}, serviceCategoryListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_category_create",
-		Description: "Create a new service category configuration.",
+		Description: "Define a new service category, a classification label applied to services, requiring a category name and accepting an optional alias. Use this for classification rather than centreon_service_group_create, which builds a collection of services; list existing categories with centreon_service_category_list and remove one with centreon_service_category_delete. The category is saved to configuration only and takes effect after centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: createTool("Create service category"),
 	}, serviceCategoryCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_category_delete",
-		Description: "Delete a service category configuration by ID.",
+		Description: "Remove a service category configuration identified by its id, deleting the classification label without affecting the services that carried it. Use this to undo a category created with centreon_service_category_create; to review existing categories first call centreon_service_category_list. The deletion is saved to configuration only and takes effect once centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: deleteTool("Delete service category"),
 	}, serviceCategoryDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_severity_list",
-		Description: "List service severity configurations. Supports pagination and name filtering.",
+		Description: "List stored service severity configurations, the prioritization levels that rank how critical a service is, with optional name search and pagination. Use this rather than centreon_service_category_list, which returns classification labels; create a severity with centreon_service_severity_create, change one with centreon_service_severity_update, and remove one with centreon_service_severity_delete. Returns page 1 with 30 results by default (maximum 100 per page) and reflects saved configuration only. Read-only.",
+		Annotations: readOnlyTool("List service severities"),
 	}, serviceSeverityListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_severity_create",
-		Description: "Create a new service severity configuration.",
+		Description: "Define a new service severity, a prioritization level for ranking services, requiring a name, a numeric level where a lower number is more severe, and an icon id, with an optional alias. Use this to add a severity; to overwrite an existing one call centreon_service_severity_update, and to remove one call centreon_service_severity_delete. The severity is saved to configuration only and takes effect after centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: createTool("Create service severity"),
 	}, serviceSeverityCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_severity_update",
-		Description: "Replace an existing service severity configuration (full update).",
+		Description: "Overwrite an existing service severity identified by its id, replacing its name, numeric level (lower is more severe), icon id, and optional alias as a full update that sets every field, so supply all intended values. Use this to change a severity created with centreon_service_severity_create; to remove one instead call centreon_service_severity_delete. The change is saved to configuration only and takes effect after centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: updateTool("Update service severity"),
 	}, serviceSeverityUpdateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_severity_delete",
-		Description: "Delete a service severity configuration by ID.",
+		Description: "Remove a service severity configuration identified by its id, deleting the prioritization level from the platform. Use this to undo a severity created with centreon_service_severity_create; to change one instead call centreon_service_severity_update. The deletion is saved to configuration only and takes effect once centreon_poller_apply pushes it to the pollers. Writes to Centreon.",
+		Annotations: deleteTool("Delete service severity"),
 	}, serviceSeverityDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_template_list",
-		Description: "List service template configurations. Supports pagination and name filtering.",
+		Description: "List stored service template configurations, the reusable presets that new services inherit their settings from, with optional name search and pagination. Use this to find a template id to pass to centreon_service_create; for actual services rather than their templates use centreon_service_list. Returns page 1 with 30 results by default (maximum 100 per page) and reflects saved configuration only. Read-only.",
+		Annotations: readOnlyTool("List service templates"),
 	}, serviceTemplateListHandler(client, logger))
 }
 

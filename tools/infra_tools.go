@@ -12,47 +12,56 @@ import (
 func RegisterInfraTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_server_list",
-		Description: "List monitoring servers (pollers). Supports pagination and name filtering.",
+		Description: "Retrieve the monitoring servers (pollers) that run checks and collect results across the Centreon platform, each with its identifier and configuration state. Use this to discover poller IDs before pushing stored configuration to one with centreon_poller_apply; it does not return check commands (centreon_command_list) or time periods (centreon_time_period_list). Supports name search and pagination (page 1, limit 30, max 100). Read-only.",
+		Annotations: readOnlyTool("List monitoring servers"),
 	}, serverListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_command_list",
-		Description: "List check commands. Supports pagination and name filtering.",
+		Description: "Retrieve the command definitions (checks, notifications, and other plugin invocations) that hosts and services reference to run their monitoring plugins. Use this to find command names and IDs when configuring monitoring; unlike centreon_server_list (pollers) or centreon_time_period_list (schedules), these are the executable command templates. Supports name search and pagination (page 1, limit 30, max 100). Read-only.",
+		Annotations: readOnlyTool("List commands"),
 	}, commandListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_time_period_list",
-		Description: "List time period configurations. Supports pagination and name filtering.",
+		Description: "Retrieve the time period definitions that control when checks run and notifications are sent, such as 24x7 or workhours schedules. Use this to find time period IDs, then centreon_time_period_get for the full weekday range detail of one; these are schedules, distinct from pollers (centreon_server_list) and commands (centreon_command_list). Supports name search and pagination (page 1, limit 30, max 100). Read-only.",
+		Annotations: readOnlyTool("List time periods"),
 	}, timePeriodListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_time_period_get",
-		Description: "Get a single time period configuration by ID.",
+		Description: "Fetch one time period by its numeric id, returning its name, alias, and full set of weekday time ranges. Use this once you have an id from centreon_time_period_list and need the complete schedule detail rather than a summary row. Requires the id parameter. Read-only.",
+		Annotations: readOnlyTool("Get time period"),
 	}, timePeriodGetHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_time_period_create",
-		Description: "Create a new time period configuration.",
+		Description: "Define a new time period from a name and a list of weekday time ranges (alias optional), returning the new numeric id. Use this to add a schedule; to change one that already exists use centreon_time_period_update, and to review current schedules first use centreon_time_period_list. Run centreon_poller_apply afterward to push the configuration live. Writes to Centreon.",
+		Annotations: createTool("Create time period"),
 	}, timePeriodCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_time_period_update",
-		Description: "Replace an existing time period configuration (full update).",
+		Description: "Replace the time period identified by id with the supplied name, alias, weekday ranges, and inherited templates as a full overwrite (omitted optional fields are cleared). Use this to change a schedule that already exists; to add a brand-new one use centreon_time_period_create. Run centreon_poller_apply afterward to push the configuration live. Writes to Centreon.",
+		Annotations: updateTool("Update time period"),
 	}, timePeriodUpdateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_time_period_delete",
-		Description: "Delete a time period configuration by ID.",
+		Description: "Permanently remove the time period with the given id from the stored configuration. Use this to retire a schedule; to change it in place instead use centreon_time_period_update. Requires the id parameter; run centreon_poller_apply afterward to push the change live. Writes to Centreon.",
+		Annotations: deleteTool("Delete time period"),
 	}, timePeriodDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_poller_apply",
-		Description: "Apply configuration (generate and reload) for a specific monitoring server (poller) by ID.",
+		Description: "Generate and reload the monitoring configuration for a single poller identified by pollerID, pushing stored config changes into the running engine and reloading that poller. Use this after create, update, or delete operations to make them take effect on one poller; to apply to every poller at once use centreon_poller_apply_all. Requires pollerID and may briefly reload the poller. Writes to Centreon.",
+		Annotations: updateTool("Apply poller config"),
 	}, pollerApplyHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_poller_apply_all",
-		Description: "Apply configuration (generate and reload) for all monitoring servers (pollers).",
+		Description: "Generate and reload the monitoring configuration for every poller on the platform, pushing all pending stored config changes into the running engines. Use this to activate configuration changes fleet-wide after edits; to target just one poller by id use centreon_poller_apply. Takes no arguments and may briefly reload each poller. Writes to Centreon.",
+		Annotations: updateTool("Apply all poller configs"),
 	}, pollerApplyAllHandler(client, logger))
 }
 
@@ -64,9 +73,9 @@ type TimePeriodDayInput struct {
 
 // CreateTimePeriodInput is the input for the centreon_time_period_create tool.
 type CreateTimePeriodInput struct {
-	Name      string               `json:"name"                jsonschema:"Time period name"`
-	Alias     string               `json:"alias,omitempty"     jsonschema:"Time period alias"`
-	Days []TimePeriodDayInput `json:"days" jsonschema:"Day definitions (required, use empty array [] if none)"`
+	Name  string               `json:"name"                jsonschema:"Time period name"`
+	Alias string               `json:"alias,omitempty"     jsonschema:"Time period alias"`
+	Days  []TimePeriodDayInput `json:"days" jsonschema:"Day definitions (required, use empty array [] if none)"`
 }
 
 // UpdateTimePeriodInput is the input for the centreon_time_period_update tool.

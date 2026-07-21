@@ -13,27 +13,32 @@ import (
 func RegisterOperationsTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_resource_acknowledge",
-		Description: "Acknowledge a host or service resource to suppress notifications.",
+		Description: "Acknowledge an active problem on a monitored host or service so Centreon stops repeat notifications while someone investigates, identifying the resource by type (host or service) and id, plus the parent host id for a service, and attaching a required comment. Use this for an ongoing incident; use centreon_resource_downtime to silence a resource during planned maintenance, or centreon_resource_comment to annotate without suppressing notifications. Optional flags keep the acknowledgement sticky until recovery, notify contacts, and persist the comment; clear it later with centreon_acknowledgement_host_cancel or centreon_acknowledgement_service_cancel. Writes to Centreon.",
+		Annotations: createTool("Acknowledge resource"),
 	}, bulkAcknowledgeHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_resource_downtime",
-		Description: "Schedule downtime for a host or service resource.",
+		Description: "Schedule a maintenance downtime window on a monitored host or service to suppress its alerts and notifications between an RFC3339 start and end time, identifying the resource by type (host or service) and id, plus the parent host id for a service. Use this for planned maintenance; use centreon_resource_acknowledge to silence an unplanned problem that is already active. Fixed downtime covers the whole window while flexible downtime starts on the first problem and runs for the given duration; cancel it with centreon_downtime_host_cancel or centreon_downtime_service_cancel. Writes to Centreon.",
+		Annotations: createTool("Schedule resource downtime"),
 	}, bulkDowntimeHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_resource_check",
-		Description: "Force an immediate check for a host or service resource.",
+		Description: "Force the monitoring engine to run an active check of a host or service right now instead of waiting for its next scheduled check, identifying the resource by type (host or service) and id, plus the parent host id for a service. Use this to refresh state on demand after a suspected recovery; use centreon_resource_submit instead to push an externally computed result rather than triggering the engine's own check. The check runs asynchronously and updates the resource's live status and output once it completes. Writes to Centreon.",
+		Annotations: createTool("Force resource check"),
 	}, bulkCheckHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_resource_submit",
-		Description: "Submit a passive check result for a host or service resource.",
+		Description: "Submit a passive check result for a host or service, setting its status (0=OK/UP, 1=WARNING/DOWN, 2=CRITICAL/UNREACHABLE, 3=UNKNOWN) with an output message and optional performance data, identifying the resource by type (host or service) and id, plus the parent host id for a service. Use this to report a result computed outside Centreon; use centreon_resource_check instead to make the engine run its own active check. The submitted status and output immediately replace the resource's live state without the engine re-checking it. Writes to Centreon.",
+		Annotations: createTool("Submit check result"),
 	}, bulkSubmitHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_resource_comment",
-		Description: "Add a comment to a host or service resource.",
+		Description: "Attach a free-text comment to a monitored host or service to record context for operators, identifying the resource by type (host or service) and id, plus the parent host id for a service. Use this to annotate a resource without changing its state; use centreon_resource_acknowledge instead when you also want to suppress notifications for an active problem. The comment appears in the resource timeline and does not affect checks or alerting. Writes to Centreon.",
+		Annotations: createTool("Comment on resource"),
 	}, bulkCommentHandler(client, logger))
 }
 
