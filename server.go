@@ -9,11 +9,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
-	centreon "github.com/tphakala/centreon-go-client"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	centreon "github.com/tphakala/centreon-go-client"
 	"github.com/tphakala/centreon-mcp-go/tools"
 )
 
@@ -140,6 +141,11 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 		sharedClient = client
 	} else {
 		tokenCache = NewTokenCache(tokenCacheTTL)
+		if len(cfg.AllowedHosts) == 0 {
+			logger.Warn("gateway: no host allowlist configured; X-Centreon-Host accepts any value (set CENTREON_ALLOWED_HOSTS to restrict)")
+		} else {
+			logger.Info("gateway: host allowlist active", "count", len(cfg.AllowedHosts))
+		}
 	}
 
 	getServer := func(r *http.Request) *mcp.Server {
@@ -207,6 +213,11 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		return nil
 	}
 
+	if !hostAllowed(host, cfg.AllowedHosts) {
+		logger.Error("gateway: host not in allowlist", "host", host)
+		return nil
+	}
+
 	gwCfg := &Config{
 		Host:            host,
 		AllowSelfSigned: cfg.AllowSelfSigned,
@@ -248,4 +259,16 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 
 	logger.Debug("gateway: created per-request client", "host", host)
 	return buildServer(client, logger)
+}
+
+// hostAllowed reports whether host may be used in gateway mode. An empty
+// allowlist disables the check and accepts any host. Otherwise the host must
+// match an allowlist entry exactly. The comparison uses the raw header value
+// (net/http already strips surrounding whitespace from header values) so the
+// value that is validated here is identical to the one used to build the client.
+func hostAllowed(host string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	return slices.Contains(allowed, host)
 }
