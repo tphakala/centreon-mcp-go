@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -27,6 +29,14 @@ func TestTokenCache_Expired(t *testing.T) {
 	_, ok := tc.Get("host1", "user1", "pass1")
 	if ok {
 		t.Error("expected token to be expired")
+	}
+	// The lazy expiry drop must clear the entry from BOTH the map and the LRU
+	// list; if it only deleted the map key the list would leak a dead element.
+	if n := len(tc.entries); n != 0 {
+		t.Errorf("expired Get should drop the map entry: %d remain", n)
+	}
+	if n := tc.ll.Len(); n != 0 {
+		t.Errorf("expired Get should drop the LRU element: %d remain", n)
 	}
 }
 
@@ -65,5 +75,115 @@ func TestTokenCache_WrongPasswordMisses(t *testing.T) {
 	tok, ok := tc.Get("host1", "user1", "correct-pass")
 	if !ok || tok != "token-abc" {
 		t.Errorf("expected the correct password to hit and return token-abc, got %q ok=%v", tok, ok)
+	}
+}
+
+// TestTokenCache_BoundedToMaxEntries pins the #29 DoS fix: distinct keys, which
+// in gateway mode come from attacker-influenced request headers, must not grow
+// the cache without bound. Flooding it with far more keys than the cap leaves
+// the cache at the cap, not at the flood size.
+func TestTokenCache_BoundedToMaxEntries(t *testing.T) {
+	tc := newTokenCache(50*time.Minute, 3)
+	for i := range 100 {
+		tc.Set("host", "user", fmt.Sprintf("pass-%d", i), "tok")
+	}
+	// The flood deterministically fills the cap, so the cache must sit at
+	// exactly 3: fewer would mean an over-eviction bug, more an unbounded one.
+	if got := len(tc.entries); got != 3 {
+		t.Fatalf("cache should be filled to exactly the cap: got %d entries, want 3", got)
+	}
+	if ll, m := tc.ll.Len(), len(tc.entries); ll != m {
+		t.Fatalf("list/map desync: list=%d map=%d", ll, m)
+	}
+}
+
+// TestTokenCache_EvictsLeastRecentlyUsed pins that eviction is LRU: a Get keeps
+// an entry alive, and the untouched one is the one dropped when the cap is hit.
+func TestTokenCache_EvictsLeastRecentlyUsed(t *testing.T) {
+	tc := newTokenCache(50*time.Minute, 2)
+	tc.Set("h", "u", "A", "tok-a")
+	tc.Set("h", "u", "B", "tok-b")
+
+	// Touch A so B becomes the least-recently-used entry.
+	if _, ok := tc.Get("h", "u", "A"); !ok {
+		t.Fatal("A should still be present before eviction")
+	}
+
+	// Inserting C is over cap, so the LRU entry (B) is evicted.
+	tc.Set("h", "u", "C", "tok-c")
+
+	if _, ok := tc.Get("h", "u", "B"); ok {
+		t.Error("B should have been evicted as least-recently-used")
+	}
+	if tok, ok := tc.Get("h", "u", "A"); !ok || tok != "tok-a" {
+		t.Errorf("A should survive eviction, got %q ok=%v", tok, ok)
+	}
+	if tok, ok := tc.Get("h", "u", "C"); !ok || tok != "tok-c" {
+		t.Errorf("C should be present, got %q ok=%v", tok, ok)
+	}
+}
+
+// TestTokenCache_SetExistingKeyRefreshes pins that re-Setting the same key
+// updates the token in place instead of adding a second entry.
+func TestTokenCache_SetExistingKeyRefreshes(t *testing.T) {
+	tc := newTokenCache(50*time.Minute, 5)
+	tc.Set("h", "u", "p", "tok-1")
+	tc.Set("h", "u", "p", "tok-2")
+
+	if got := len(tc.entries); got != 1 {
+		t.Fatalf("re-Set of the same key should not grow the cache index: got %d entries", got)
+	}
+	if got := tc.ll.Len(); got != 1 {
+		t.Fatalf("re-Set of the same key should not grow the LRU list: got %d elements", got)
+	}
+	if tok, ok := tc.Get("h", "u", "p"); !ok || tok != "tok-2" {
+		t.Errorf("expected the refreshed token tok-2, got %q ok=%v", tok, ok)
+	}
+}
+
+// TestTokenCache_SetPromotesExistingKey pins that re-Setting an existing key
+// also marks it most-recently-used, so a subsequently-inserted key evicts the
+// other (now least-recently-used) entry rather than the just-refreshed one.
+func TestTokenCache_SetPromotesExistingKey(t *testing.T) {
+	tc := newTokenCache(50*time.Minute, 2)
+	tc.Set("h", "u", "A", "tok-a")
+	tc.Set("h", "u", "B", "tok-b")
+
+	// Refresh A: this must promote A to MRU, leaving B least-recently-used.
+	tc.Set("h", "u", "A", "tok-a2")
+
+	// Inserting C is over cap, so the LRU entry (B) is evicted, not A.
+	tc.Set("h", "u", "C", "tok-c")
+
+	if _, ok := tc.Get("h", "u", "B"); ok {
+		t.Error("B should have been evicted after A was refreshed to MRU")
+	}
+	if tok, ok := tc.Get("h", "u", "A"); !ok || tok != "tok-a2" {
+		t.Errorf("A should survive with its refreshed token, got %q ok=%v", tok, ok)
+	}
+}
+
+// TestTokenCache_ConcurrentAccessStaysBounded runs Set/Get from many goroutines
+// (with -race) to confirm the cache stays within its cap and free of data races.
+func TestTokenCache_ConcurrentAccessStaysBounded(t *testing.T) {
+	const goroutines, perGoroutine, capacity = 8, 200, 8
+	tc := newTokenCache(50*time.Minute, capacity)
+
+	var wg sync.WaitGroup
+	for g := range goroutines {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := range perGoroutine {
+				p := fmt.Sprintf("p-%d-%d", g, i)
+				tc.Set("h", "u", p, "tok")
+				tc.Get("h", "u", p)
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	if got := len(tc.entries); got > capacity {
+		t.Fatalf("cache exceeded cap under concurrency: got %d, want <= %d", got, capacity)
 	}
 }

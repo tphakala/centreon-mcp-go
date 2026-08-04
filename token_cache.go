@@ -1,32 +1,60 @@
 package main
 
 import (
+	"container/list"
 	"crypto/sha256"
 	"fmt"
 	"sync"
 	"time"
 )
 
+// tokenCacheMaxEntries bounds how many auth tokens the gateway caches at once.
+// In gateway mode the cache key is derived from request headers (host, username,
+// password), so an unbounded cache lets a caller with distinct credentials grow
+// it without limit. The cap turns that into a fixed memory ceiling; legitimate
+// deployments have far fewer distinct credential sets than this.
+const tokenCacheMaxEntries = 4096
+
 type tokenEntry struct {
 	token   string
 	expires time.Time
+	el      *list.Element // position in ll; el.Value holds the map key (string)
 }
 
-// TokenCache stores auth tokens keyed by host+username+password with TTL.
-// Binding the key to the password ensures a request presenting a different
-// (e.g. wrong) password misses the cache and is forced through a real login,
-// rather than reusing a token minted for the correct password.
+// TokenCache is a bounded, TTL'd LRU of auth tokens keyed by
+// host+username+password. Binding the key to the password ensures a request
+// presenting a different (e.g. wrong) password misses the cache and is forced
+// through a real login, rather than reusing a token minted for the correct
+// password.
+//
+// The cache is bounded to a fixed number of entries and evicts the
+// least-recently-used entry on overflow, so distinct (attacker-influenced)
+// gateway keys cannot exhaust memory. Expired entries are dropped lazily on
+// access; there is no whole-map sweep on the write path.
 type TokenCache struct {
-	mu      sync.Mutex
-	ttl     time.Duration
-	entries map[string]tokenEntry
+	mu         sync.Mutex
+	ttl        time.Duration
+	maxEntries int
+	ll         *list.List             // front = most recently used; Value is the key
+	entries    map[string]*tokenEntry // key -> entry
 }
 
-// NewTokenCache creates a new token cache with the given TTL.
+// NewTokenCache creates a token cache with the given TTL and the default cap.
 func NewTokenCache(ttl time.Duration) *TokenCache {
+	return newTokenCache(ttl, tokenCacheMaxEntries)
+}
+
+// newTokenCache creates a token cache with an explicit entry cap. Split out from
+// NewTokenCache so eviction can be exercised with a small cap in tests.
+func newTokenCache(ttl time.Duration, maxEntries int) *TokenCache {
+	if maxEntries < 1 {
+		maxEntries = 1
+	}
 	return &TokenCache{
-		ttl:     ttl,
-		entries: make(map[string]tokenEntry),
+		ttl:        ttl,
+		maxEntries: maxEntries,
+		ll:         list.New(),
+		entries:    make(map[string]*tokenEntry),
 	}
 }
 
@@ -44,35 +72,71 @@ func cacheKey(host, username, password string) string {
 }
 
 // Get returns a cached token if it exists and hasn't expired. The password is
-// part of the key, so a different password will not match a cached entry.
+// part of the key, so a different password will not match a cached entry. A hit
+// marks the entry most-recently-used; an expired entry is dropped.
 func (c *TokenCache) Get(host, username, password string) (string, bool) {
+	// Hash before taking the lock: cacheKey is pure, and the password comes from
+	// an attacker-influenced request header, so hashing it must not hold the
+	// global mutex. Under the lock only the O(1) map/list work runs.
+	key := cacheKey(host, username, password)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	key := cacheKey(host, username, password)
 	entry, ok := c.entries[key]
-	if !ok || time.Now().After(entry.expires) {
-		delete(c.entries, key)
+	if !ok {
 		return "", false
 	}
+	if time.Now().After(entry.expires) {
+		c.remove(key, entry)
+		return "", false
+	}
+	c.ll.MoveToFront(entry.el)
 	return entry.token, true
 }
 
-// Set stores a token in the cache and sweeps expired entries.
+// Set stores a token, refreshing an existing key in place. When the cache is at
+// capacity and the key is new, the least-recently-used entry is evicted first,
+// so the cache stays within its fixed bound.
 func (c *TokenCache) Set(host, username, password, token string) {
+	// Hash before taking the lock (see Get): the password is attacker-influenced
+	// and cacheKey is pure, so the hash must not run under the global mutex.
+	key := cacheKey(host, username, password)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := time.Now()
-	for k, e := range c.entries {
-		if now.After(e.expires) {
-			delete(c.entries, k)
-		}
+	expires := time.Now().Add(c.ttl)
+
+	if entry, ok := c.entries[key]; ok {
+		entry.token = token
+		entry.expires = expires
+		c.ll.MoveToFront(entry.el)
+		return
 	}
 
-	key := cacheKey(host, username, password)
-	c.entries[key] = tokenEntry{
-		token:   token,
-		expires: now.Add(c.ttl),
+	if c.ll.Len() >= c.maxEntries {
+		c.removeOldest()
 	}
+	el := c.ll.PushFront(key)
+	c.entries[key] = &tokenEntry{token: token, expires: expires, el: el}
+}
+
+// remove drops a known key/entry pair from both the list and the index.
+// The caller holds mu.
+func (c *TokenCache) remove(key string, entry *tokenEntry) {
+	c.ll.Remove(entry.el)
+	delete(c.entries, key)
+}
+
+// removeOldest evicts the least-recently-used entry (the back of the list).
+// The caller holds mu.
+func (c *TokenCache) removeOldest() {
+	back := c.ll.Back()
+	if back == nil {
+		return
+	}
+	key, _ := back.Value.(string)
+	c.ll.Remove(back)
+	delete(c.entries, key)
 }
