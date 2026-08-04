@@ -2,10 +2,13 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"golang.org/x/sync/errgroup"
 )
 
 // PlatformStatus combines host status counts, service status counts, and monitoring servers.
@@ -24,29 +27,78 @@ func RegisterStatusTools(s *mcp.Server, client *centreon.Client, logger *slog.Lo
 	}, platformStatusHandler(client, logger))
 }
 
+// logReadError logs a failed platform-status read at Error level, unless the
+// read was cancelled (context.Canceled): either a sibling read failed first and
+// errgroup cancelled this one, or the caller cancelled the request. It then
+// returns the wrapped error for errgroup. Skipping cancelled reads keeps one
+// logical failure to one error line instead of three.
+func logReadError(logger *slog.Logger, part, msg string, err error) error {
+	if !errors.Is(err, context.Canceled) {
+		logger.Error("failed: centreon_platform_status ("+part+")", "error", err)
+	}
+	return fmt.Errorf("%s: %w", msg, err)
+}
+
 func platformStatusHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+	return platformStatusHandlerFn(
+		client.MonitoringHosts.StatusCounts,
+		client.MonitoringServices.StatusCounts,
+		func(ctx context.Context) (*centreon.ListResponse[centreon.MonitoringServer], error) {
+			return client.MonitoringServers.List(ctx)
+		},
+		logger,
+	)
+}
+
+// platformStatusHandlerFn runs the three independent status reads concurrently
+// and combines them, so total latency is the slowest single call rather than
+// their sum. Taking the reads as function values keeps it unit-testable without
+// a live Centreon client.
+func platformStatusHandlerFn(
+	fetchHosts func(context.Context) (*centreon.HostStatusCount, error),
+	fetchServices func(context.Context) (*centreon.ServiceStatusCount, error),
+	fetchServers func(context.Context) (*centreon.ListResponse[centreon.MonitoringServer], error),
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_platform_status")
 		logger.Debug("centreon_platform_status")
 
-		hosts, err := client.MonitoringHosts.StatusCounts(ctx)
-		if err != nil {
-			logger.Error("failed: centreon_platform_status (hosts)", "error", err)
-			res, anyVal := errorResult("failed to get host status counts: %v", err)
-			return res, anyVal, nil
-		}
-
-		services, err := client.MonitoringServices.StatusCounts(ctx)
-		if err != nil {
-			logger.Error("failed: centreon_platform_status (services)", "error", err)
-			res, anyVal := errorResult("failed to get service status counts: %v", err)
-			return res, anyVal, nil
-		}
-
-		servers, err := client.MonitoringServers.List(ctx)
-		if err != nil {
-			logger.Error("failed: centreon_platform_status (servers)", "error", err)
-			res, anyVal := errorResult("failed to get monitoring servers: %v", err)
+		var (
+			hosts    *centreon.HostStatusCount
+			services *centreon.ServiceStatusCount
+			servers  *centreon.ListResponse[centreon.MonitoringServer]
+		)
+		// errgroup cancels the shared context on the first failure so the other
+		// two reads can abort early. Each goroutine writes only its own variable,
+		// and g.Wait() establishes the happens-before for reading them afterwards.
+		g, gctx := errgroup.WithContext(ctx)
+		g.Go(func() error {
+			h, err := fetchHosts(gctx)
+			if err != nil {
+				return logReadError(logger, "hosts", "failed to get host status counts", err)
+			}
+			hosts = h
+			return nil
+		})
+		g.Go(func() error {
+			s, err := fetchServices(gctx)
+			if err != nil {
+				return logReadError(logger, "services", "failed to get service status counts", err)
+			}
+			services = s
+			return nil
+		})
+		g.Go(func() error {
+			srv, err := fetchServers(gctx)
+			if err != nil {
+				return logReadError(logger, "servers", "failed to get monitoring servers", err)
+			}
+			servers = srv
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			res, anyVal := errorResult("%v", err)
 			return res, anyVal, nil
 		}
 
