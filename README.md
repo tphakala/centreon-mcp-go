@@ -65,6 +65,7 @@ All configuration is via environment variables.
 | `MCP_HTTP_PORT`             | No       | `8080`      | HTTP listen port (HTTP transport only)                       |
 | `MCP_HTTP_HOST`             | No       | `0.0.0.0`   | HTTP listen address (HTTP transport only)                    |
 | `AUTH_MODE`                 | No       | `env`       | Authentication mode: `env` or `gateway`                      |
+| `CENTREON_ALLOWED_HOSTS`    | No       | (none)      | Gateway mode only: comma-separated allowlist of accepted `X-Centreon-Host` values. Unset or empty means any host is accepted. |
 | `LOG_LEVEL`                 | No       | `info`      | Log level: `debug`, `info`, `warn`, or `error`               |
 
 \* Either `CENTREON_TOKEN` or both `CENTREON_USERNAME` and `CENTREON_PASSWORD` must be set. In `gateway` auth mode, credentials are supplied per-request via headers instead.
@@ -160,11 +161,20 @@ Enable it with `AUTH_MODE=gateway` alongside `MCP_TRANSPORT=http`. In this mode,
 
 Acquired session tokens are cached for 50 minutes per (host, username) pair to avoid repeated logins.
 
-**Note:** Deploy behind a reverse proxy (nginx, Caddy, Traefik, etc.) in production. Do not expose gateway mode directly to untrusted clients, as it accepts arbitrary Centreon credentials.
+### Host allowlist
+
+By default gateway mode connects to whatever `X-Centreon-Host` a caller supplies, so an exposed endpoint can be used as an SSRF or open-proxy primitive. Set `CENTREON_ALLOWED_HOSTS` to a comma-separated list of permitted host URLs to restrict this; requests whose `X-Centreon-Host` does not match an entry exactly are rejected. When the variable is unset or empty, behavior is unchanged (any host is accepted) and the server logs a warning at startup. Matching is exact and case-sensitive, so list each host URL as callers send it.
+
+```bash
+export CENTREON_ALLOWED_HOSTS="https://centreon.example.com,https://centreon2.example.com"
+```
+
+**Note:** Deploy behind a reverse proxy (nginx, Caddy, Traefik, etc.) in production. Do not expose gateway mode directly to untrusted clients, as it accepts arbitrary Centreon credentials. Set `CENTREON_ALLOWED_HOSTS` to limit which Centreon servers the gateway will connect to.
 
 ```bash
 export MCP_TRANSPORT=http
 export AUTH_MODE=gateway
+export CENTREON_ALLOWED_HOSTS="https://centreon.example.com"
 ./centreon-mcp-go
 ```
 

@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 func TestLoadConfig_Valid(t *testing.T) {
 	t.Setenv("CENTREON_HOST", "https://centreon.example.com")
@@ -131,5 +135,102 @@ func TestLoadConfig_TokenOnly(t *testing.T) {
 	}
 	if cfg.Token != "my-api-token" {
 		t.Errorf("expected Token my-api-token, got %q", cfg.Token)
+	}
+}
+
+func TestLoadConfig_AllowedHosts(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    []string
+		wantErr bool
+	}{
+		{"unset or empty yields no allowlist", "", nil, false},
+		{"single host", "https://a.example.com", []string{"https://a.example.com"}, false},
+		{
+			"multiple hosts trimmed",
+			" https://a.example.com , https://b.example.com ",
+			[]string{"https://a.example.com", "https://b.example.com"},
+			false,
+		},
+		{"empty entries dropped", "https://a.example.com,,", []string{"https://a.example.com"}, false},
+		{"only separators and whitespace errors", " , , ", nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CENTREON_HOST", "https://centreon.example.com")
+			t.Setenv("CENTREON_USERNAME", "admin")
+			t.Setenv("CENTREON_PASSWORD", "secret")
+			t.Setenv("CENTREON_TOKEN", "")
+			// Isolate from ambient values so the only error source is the allowlist.
+			t.Setenv("MCP_HTTP_PORT", "")
+			t.Setenv("MCP_TRANSPORT", "")
+			t.Setenv("AUTH_MODE", "")
+			t.Setenv("CENTREON_ALLOWED_HOSTS", tt.value)
+
+			cfg, err := LoadConfig()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), "CENTREON_ALLOWED_HOSTS") {
+					t.Errorf("expected error about CENTREON_ALLOWED_HOSTS, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if !slices.Equal(cfg.AllowedHosts, tt.want) {
+				t.Errorf("expected AllowedHosts %v, got %v", tt.want, cfg.AllowedHosts)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_HTTPPort(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{"unset defaults to 8080", "", defaultHTTPPort, false},
+		{"valid port", "9090", 9090, false},
+		{"non-numeric errors", "abc", 0, true},
+		{"below range errors", "0", 0, true},
+		{"above range errors", "70000", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CENTREON_HOST", "https://centreon.example.com")
+			t.Setenv("CENTREON_TOKEN", "tok")
+			t.Setenv("CENTREON_USERNAME", "")
+			t.Setenv("CENTREON_PASSWORD", "")
+			// Isolate from ambient values so the only error source is the port.
+			t.Setenv("CENTREON_ALLOWED_HOSTS", "")
+			t.Setenv("MCP_TRANSPORT", "")
+			t.Setenv("AUTH_MODE", "")
+			t.Setenv("MCP_HTTP_PORT", tt.value)
+
+			cfg, err := LoadConfig()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), "MCP_HTTP_PORT") {
+					t.Errorf("expected error about MCP_HTTP_PORT, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if cfg.HTTPPort != tt.want {
+				t.Errorf("HTTPPort = %d, want %d", cfg.HTTPPort, tt.want)
+			}
+		})
 	}
 }
