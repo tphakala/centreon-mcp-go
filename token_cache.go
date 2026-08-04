@@ -12,7 +12,10 @@ type tokenEntry struct {
 	expires time.Time
 }
 
-// TokenCache stores auth tokens keyed by host+username with TTL.
+// TokenCache stores auth tokens keyed by host+username+password with TTL.
+// Binding the key to the password ensures a request presenting a different
+// (e.g. wrong) password misses the cache and is forced through a real login,
+// rather than reusing a token minted for the correct password.
 type TokenCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
@@ -27,17 +30,18 @@ func NewTokenCache(ttl time.Duration) *TokenCache {
 	}
 }
 
-func cacheKey(host, username string) string {
-	h := sha256.Sum256([]byte(host + "\x00" + username))
+func cacheKey(host, username, password string) string {
+	h := sha256.Sum256([]byte(host + "\x00" + username + "\x00" + password))
 	return fmt.Sprintf("%x", h)
 }
 
-// Get returns a cached token if it exists and hasn't expired.
-func (c *TokenCache) Get(host, username string) (string, bool) {
+// Get returns a cached token if it exists and hasn't expired. The password is
+// part of the key, so a different password will not match a cached entry.
+func (c *TokenCache) Get(host, username, password string) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	key := cacheKey(host, username)
+	key := cacheKey(host, username, password)
 	entry, ok := c.entries[key]
 	if !ok || time.Now().After(entry.expires) {
 		delete(c.entries, key)
@@ -47,7 +51,7 @@ func (c *TokenCache) Get(host, username string) (string, bool) {
 }
 
 // Set stores a token in the cache and sweeps expired entries.
-func (c *TokenCache) Set(host, username, token string) {
+func (c *TokenCache) Set(host, username, password, token string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -58,7 +62,7 @@ func (c *TokenCache) Set(host, username, token string) {
 		}
 	}
 
-	key := cacheKey(host, username)
+	key := cacheKey(host, username, password)
 	c.entries[key] = tokenEntry{
 		token:   token,
 		expires: now.Add(c.ttl),
