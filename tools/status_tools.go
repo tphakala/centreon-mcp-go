@@ -29,9 +29,10 @@ func RegisterStatusTools(s *mcp.Server, client *centreon.Client, logger *slog.Lo
 
 // logReadError logs a failed platform-status read at Error level, unless the
 // read was cancelled (context.Canceled): either a sibling read failed first and
-// errgroup cancelled this one, or the caller cancelled the request. It then
-// returns the wrapped error for errgroup. Skipping cancelled reads keeps one
-// logical failure to one error line instead of three.
+// errgroup cancelled this one, or the caller cancelled the request. A real
+// timeout (context.DeadlineExceeded) is not a cancellation and is still logged.
+// It then returns the wrapped error for errgroup. Skipping cancelled reads keeps
+// one logical failure to one error line instead of three.
 func logReadError(logger *slog.Logger, part, msg string, err error) error {
 	if !errors.Is(err, context.Canceled) {
 		logger.Error("failed: centreon_platform_status ("+part+")", "error", err)
