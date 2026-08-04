@@ -163,6 +163,69 @@ func TestTokenCache_SetPromotesExistingKey(t *testing.T) {
 	}
 }
 
+// TestTokenCache_DrainReturnsAllAndEmpties pins the #5 shutdown-drain support:
+// Drain returns every cached (host, token) pair so each Centreon session can be
+// logged out, and leaves the cache empty (both the index and the LRU list).
+func TestTokenCache_DrainReturnsAllAndEmpties(t *testing.T) {
+	tc := newTokenCache(50*time.Minute, 10)
+	tc.Set("https://h1", "u", "p1", "tok-1")
+	tc.Set("https://h2", "u", "p2", "tok-2")
+	tc.Set("https://h3", "u", "p3", "tok-3")
+
+	drained := tc.Drain()
+	if len(drained) != 3 {
+		t.Fatalf("Drain should return every cached entry: got %d, want 3", len(drained))
+	}
+
+	got := make(map[string]string, len(drained))
+	for _, ct := range drained {
+		got[ct.host] = ct.token
+	}
+	want := map[string]string{"https://h1": "tok-1", "https://h2": "tok-2", "https://h3": "tok-3"}
+	for h, tok := range want {
+		if got[h] != tok {
+			t.Errorf("drained token for %s = %q, want %q", h, got[h], tok)
+		}
+	}
+
+	if n := len(tc.entries); n != 0 {
+		t.Errorf("Drain should empty the entry index: %d remain", n)
+	}
+	if n := tc.ll.Len(); n != 0 {
+		t.Errorf("Drain should empty the LRU list: %d remain", n)
+	}
+	if _, ok := tc.Get("https://h1", "u", "p1"); ok {
+		t.Error("Get should miss after Drain")
+	}
+}
+
+// TestTokenCache_DrainIncludesExpiredEntries pins that Drain returns entries
+// whose cache TTL has already passed but that have not yet been lazily dropped.
+// The Centreon server session can outlive the cache TTL (activity resets its
+// idle timer), so a graceful shutdown must still attempt to log these out.
+func TestTokenCache_DrainIncludesExpiredEntries(t *testing.T) {
+	// A negative TTL makes the entry already expired the instant it is stored.
+	tc := newTokenCache(-time.Minute, 10)
+	tc.Set("https://h1", "u", "p1", "tok-expired")
+
+	drained := tc.Drain()
+	if len(drained) != 1 {
+		t.Fatalf("Drain must include TTL-expired entries: got %d, want 1", len(drained))
+	}
+	if drained[0].host != "https://h1" || drained[0].token != "tok-expired" {
+		t.Errorf("unexpected drained entry: %+v", drained[0])
+	}
+}
+
+// TestTokenCache_DrainEmptyReturnsNothing pins that draining an empty cache is a
+// safe no-op that returns no work.
+func TestTokenCache_DrainEmptyReturnsNothing(t *testing.T) {
+	tc := newTokenCache(50*time.Minute, 10)
+	if drained := tc.Drain(); len(drained) != 0 {
+		t.Fatalf("Drain on an empty cache should return nothing, got %d", len(drained))
+	}
+}
+
 // TestTokenCache_ConcurrentAccessStaysBounded runs Set/Get from many goroutines
 // (with -race) to confirm the cache stays within its cap and free of data races.
 func TestTokenCache_ConcurrentAccessStaysBounded(t *testing.T) {

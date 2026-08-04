@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -74,6 +79,230 @@ func TestGatewayServer_HostAllowlist(t *testing.T) {
 			t.Error("expected non-nil server when allowlist is empty, got nil")
 		}
 	})
+}
+
+// TestLogoutCachedToken_SendsTokenToLogoutEndpoint pins that logoutCachedToken
+// invalidates a specific Centreon session: it must call GET /logout with the
+// cached token in the X-AUTH-TOKEN header (the client sends its stored token),
+// so the right server session is torn down.
+func TestLogoutCachedToken_SendsTokenToLogoutEndpoint(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	var logoutCount atomic.Int32
+	var gotToken atomic.Value
+	gotToken.Store("")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /centreon/api/latest/logout", func(w http.ResponseWriter, r *http.Request) {
+		logoutCount.Add(1)
+		gotToken.Store(r.Header.Get("X-AUTH-TOKEN"))
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	logoutCachedToken(t.Context(), srv.URL, "tok-xyz", &Config{}, logger, nil)
+
+	if n := logoutCount.Load(); n != 1 {
+		t.Fatalf("expected exactly 1 logout call, got %d", n)
+	}
+	if tok, _ := gotToken.Load().(string); tok != "tok-xyz" {
+		t.Errorf("logout must send the cached token as X-AUTH-TOKEN, got %q", tok)
+	}
+}
+
+// TestDrainAndLogout_LogsOutEveryCachedTokenAndEmptiesCache pins the #5 shutdown
+// behaviour end to end: every token in the cache is logged out on the Centreon
+// server and the cache is left empty.
+func TestDrainAndLogout_LogsOutEveryCachedTokenAndEmptiesCache(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /centreon/api/latest/logout", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.Header.Get("X-AUTH-TOKEN")] = true
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cache := newTokenCache(50*time.Minute, 10)
+	cache.Set(srv.URL, "admin", "p1", "tok-1")
+	cache.Set(srv.URL, "admin", "p2", "tok-2")
+	cache.Set(srv.URL, "admin", "p3", "tok-3")
+
+	drainAndLogout(t.Context(), cache, &Config{}, logger, nil)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, tok := range []string{"tok-1", "tok-2", "tok-3"} {
+		if !seen[tok] {
+			t.Errorf("token %q was not logged out", tok)
+		}
+	}
+	if n := len(cache.entries); n != 0 {
+		t.Errorf("drainAndLogout should empty the cache, %d entries remain", n)
+	}
+}
+
+// TestDrainAndLogout_SwallowsLogoutFailuresAndEmptiesCache pins the best-effort
+// contract: when the Centreon logout endpoint fails, drainAndLogout still
+// attempts every cached session, still empties the cache, and never fails. A
+// failing logout must not abort the remaining ones.
+func TestDrainAndLogout_SwallowsLogoutFailuresAndEmptiesCache(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	var attempts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /centreon/api/latest/logout", func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cache := newTokenCache(50*time.Minute, 10)
+	cache.Set(srv.URL, "admin", "p1", "tok-1")
+	cache.Set(srv.URL, "admin", "p2", "tok-2")
+	cache.Set(srv.URL, "admin", "p3", "tok-3")
+
+	drainAndLogout(t.Context(), cache, &Config{}, logger, nil)
+
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("every cached session should be attempted despite failures: got %d, want 3", got)
+	}
+	if n := len(cache.entries); n != 0 {
+		t.Errorf("drainAndLogout should empty the cache even when logouts fail, %d entries remain", n)
+	}
+}
+
+// TestRunHTTP_GatewayLogsOutCachedSessionsOnShutdown is the end-to-end guard for
+// issue #5: it starts the real HTTP server in gateway mode, drives one gateway
+// request that logs in and caches a token, cancels the context, and asserts that
+// runHTTP does not return until the cached Centreon session has been logged out.
+// This pins the shutdownDone wait: without it, runHTTP would return before the
+// drain completes and the logout would be lost.
+func TestRunHTTP_GatewayLogsOutCachedSessionsOnShutdown(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	var logins, logouts atomic.Int32
+	var loggedOutToken atomic.Value
+	loggedOutToken.Store("")
+
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("POST /centreon/api/latest/login", func(w http.ResponseWriter, _ *http.Request) {
+		n := logins.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"security": map[string]any{"token": fmt.Sprintf("tok-%d", n)}})
+	})
+	fakeMux.HandleFunc("GET /centreon/api/latest/logout", func(w http.ResponseWriter, r *http.Request) {
+		logouts.Add(1)
+		loggedOutToken.Store(r.Header.Get("X-AUTH-TOKEN"))
+		w.WriteHeader(http.StatusOK)
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	port := freePort(t)
+	cfg := &Config{
+		Host:      fake.URL, // required field; unused in gateway mode (host comes from headers)
+		Transport: transportHTTP,
+		AuthMode:  authModeGateway,
+		HTTPHost:  "127.0.0.1",
+		HTTPPort:  port,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runHTTP(ctx, cfg, logger, nil) }()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitForHealth(t, base+"/health")
+
+	// One gateway request: the gateway logs in on the fake Centreon and caches the
+	// token. The login runs synchronously while building the per-request server.
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/mcp", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build /mcp request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("X-Centreon-Host", fake.URL)
+	req.Header.Set("X-Centreon-Username", "admin")
+	req.Header.Set("X-Centreon-Password", "secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if got := logins.Load(); got != 1 {
+		t.Fatalf("gateway request should trigger exactly one login, got %d", got)
+	}
+
+	// Graceful shutdown: runHTTP must not return until the drain has completed.
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runHTTP returned error on shutdown: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("runHTTP did not return within 15s after context cancel")
+	}
+
+	if got := logouts.Load(); got != 1 {
+		t.Fatalf("cached session should be logged out before runHTTP returns, got %d logouts", got)
+	}
+	if tok, _ := loggedOutToken.Load().(string); tok != "tok-1" {
+		t.Errorf("shutdown logout should target the cached token, got %q", tok)
+	}
+}
+
+// freePort reserves an ephemeral TCP port and releases it, returning the number
+// so runHTTP can bind it. A small TOCTOU window is acceptable for a local test.
+func freePort(t *testing.T) int {
+	t.Helper()
+	var lc net.ListenConfig
+	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve free port: %v", err)
+	}
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = l.Close()
+		t.Fatalf("listener address is not *net.TCPAddr: %T", l.Addr())
+	}
+	port := addr.Port
+	_ = l.Close()
+	return port
+}
+
+// waitForHealth polls the /health endpoint until it returns 200 or the deadline
+// elapses, so the test only proceeds once runHTTP is actually serving.
+func waitForHealth(t *testing.T, url string) {
+	t.Helper()
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
+		if err != nil {
+			t.Fatalf("build health request: %v", err)
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("server did not become healthy within 10s")
 }
 
 // TestGatewayServer_TokenCachePinsPassword is an end-to-end regression guard

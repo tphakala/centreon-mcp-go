@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
 	"github.com/tphakala/centreon-mcp-go/tools"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -28,9 +29,20 @@ const (
 	shutdownTimeout   = 15 * time.Second
 	tokenCacheTTL     = 50 * time.Minute
 	selfSignedTimeout = 30 * time.Second
-	authModeEnv       = "env"
-	transportStdio    = "stdio"
-	transportHTTP     = "http"
+
+	authModeEnv     = "env"
+	authModeGateway = "gateway"
+	transportStdio  = "stdio"
+	transportHTTP   = "http"
+
+	// shutdownLogoutTimeout bounds the best-effort logout of Centreon sessions on
+	// graceful shutdown (both the env-mode shared client and the gateway token
+	// cache). It is a budget separate from shutdownTimeout so a slow
+	// httpServer.Shutdown cannot leave the logout with an already-expired context.
+	shutdownLogoutTimeout = 10 * time.Second
+	// gatewayLogoutConcurrency caps how many session logouts run at once during
+	// the shutdown drain, so a large cache does not open thousands of sockets.
+	gatewayLogoutConcurrency = 16
 )
 
 // buildServer creates an MCP server with all tools registered.
@@ -181,24 +193,41 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 		IdleTimeout:       idleTimeout,
 	}
 
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancelShutdown := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancelShutdown()
 		_ = httpServer.Shutdown(shutdownCtx)
 
+		// Best-effort session logout runs on a budget separate from Shutdown's, so a
+		// slow Shutdown cannot leave the logout with an already-expired context. Both
+		// modes use it, so the two paths stay consistent. Shutdown has waited only up
+		// to shutdownTimeout; if it timed out, a straggler request may still hold a
+		// cached token, but the process is exiting, so logging it out is acceptable.
+		logoutCtx, cancelLogout := context.WithTimeout(context.WithoutCancel(ctx), shutdownLogoutTimeout)
+		defer cancelLogout()
+
 		if sharedClient != nil && cfg.Token == "" {
-			_ = sharedClient.Logout(shutdownCtx)
+			_ = sharedClient.Logout(logoutCtx)
 			logger.Info("centreon client logged out")
+		}
+		if tokenCache != nil {
+			drainAndLogout(logoutCtx, tokenCache, cfg, logger, httpClient)
 		}
 	}()
 
 	logger.Info("centreon-mcp-go HTTP server listening", "addr", addr, "authMode", cfg.AuthMode)
-	if err := httpServer.ListenAndServe(); errors.Is(err, http.ErrServerClosed) {
-		return nil
-	} else {
+	err := httpServer.ListenAndServe()
+	if !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	// ListenAndServe returns ErrServerClosed as soon as Shutdown is *called*, not
+	// when it completes. Wait for the shutdown goroutine so in-flight requests are
+	// drained and cached sessions are logged out before the process exits.
+	<-shutdownDone
+	return nil
 }
 
 // gatewayServer creates a per-request MCP server from gateway headers.
@@ -271,4 +300,57 @@ func hostAllowed(host string, allowed []string) bool {
 		return true
 	}
 	return slices.Contains(allowed, host)
+}
+
+// drainAndLogout empties the gateway token cache and logs out each cached
+// Centreon session. It runs only during graceful shutdown, after
+// httpServer.Shutdown has returned. Shutdown has waited up to shutdownTimeout for
+// in-flight handlers; if it did not time out, no request still holds any of these
+// tokens and logging them out cannot break a live request. Logouts run
+// concurrently, bounded by gatewayLogoutConcurrency and by ctx; once ctx is done
+// the loop stops spawning further attempts that would only fail immediately.
+func drainAndLogout(ctx context.Context, tc *TokenCache, cfg *Config, logger *slog.Logger, httpClient *http.Client) {
+	tokens := tc.Drain()
+	if len(tokens) == 0 {
+		return
+	}
+
+	var g errgroup.Group
+	g.SetLimit(gatewayLogoutConcurrency)
+	for _, ct := range tokens {
+		if ctx.Err() != nil {
+			break
+		}
+		g.Go(func() error {
+			logoutCachedToken(ctx, ct.host, ct.token, cfg, logger, httpClient)
+			return nil
+		})
+	}
+	_ = g.Wait()
+	logger.Info("gateway: token cache drained", "count", len(tokens))
+}
+
+// logoutCachedToken best-effort invalidates a single cached gateway session by
+// building a token-authenticated client for its host and calling Logout, which
+// sends the token as X-AUTH-TOKEN to the Centreon logout endpoint. Failures are
+// logged at debug and swallowed: shutdown cleanup must never fail the process.
+// The cleanup client is built WITHOUT the shared logger on purpose: the centreon
+// client logs every failed request at Error, so on a cancelled or failing
+// shutdown logout it would emit dependency-layer Error noise that contradicts
+// this function's own debug-and-swallow handling.
+func logoutCachedToken(ctx context.Context, host, token string, cfg *Config, logger *slog.Logger, httpClient *http.Client) {
+	if token == "" {
+		return
+	}
+	gwCfg := &Config{Host: host, Token: token, AllowSelfSigned: cfg.AllowSelfSigned}
+	client, err := newCentreonClient(host, gwCfg, nil, httpClient)
+	if err != nil {
+		logger.Debug("gateway: failed to build client for token logout", "host", host, "error", err)
+		return
+	}
+	if err := client.Logout(ctx); err != nil {
+		logger.Debug("gateway: token logout failed", "host", host, "error", err)
+		return
+	}
+	logger.Debug("gateway: logged out cached token", "host", host)
 }

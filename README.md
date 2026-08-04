@@ -161,6 +161,8 @@ Enable it with `AUTH_MODE=gateway` alongside `MCP_TRANSPORT=http`. In this mode,
 
 Acquired session tokens are cached for 50 minutes per (host, username) pair to avoid repeated logins.
 
+On graceful shutdown (SIGINT/SIGTERM) the server logs out the Centreon sessions it created so they do not linger on the server until their idle timeout, and it waits for those logout calls to finish before exiting. Shutdown therefore takes a little longer than before, up to roughly 25 seconds if a Centreon host is slow or unreachable, so allow for this in your orchestrator's stop grace period (for example Kubernetes `terminationGracePeriodSeconds`).
+
 ### Host allowlist
 
 By default gateway mode connects to whatever `X-Centreon-Host` a caller supplies, so an exposed endpoint can be used as an SSRF or open-proxy primitive. Set `CENTREON_ALLOWED_HOSTS` to a comma-separated list of permitted host URLs to restrict this; requests whose `X-Centreon-Host` does not match an entry exactly are rejected. When the variable is unset or empty, behavior is unchanged (any host is accepted) and the server logs a warning at startup. Matching is exact and case-sensitive, so list each host URL as callers send it.

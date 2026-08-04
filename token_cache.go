@@ -16,6 +16,7 @@ import (
 const tokenCacheMaxEntries = 4096
 
 type tokenEntry struct {
+	host    string // Centreon host this token authenticates against; needed to log the session out (the cache key is a hash, so host is not recoverable from it)
 	token   string
 	expires time.Time
 	el      *list.Element // position in ll; el.Value holds the map key (string)
@@ -119,7 +120,7 @@ func (c *TokenCache) Set(host, username, password, token string) {
 		c.removeOldest()
 	}
 	el := c.ll.PushFront(key)
-	c.entries[key] = &tokenEntry{token: token, expires: expires, el: el}
+	c.entries[key] = &tokenEntry{host: host, token: token, expires: expires, el: el}
 }
 
 // remove drops a known key/entry pair from both the list and the index.
@@ -139,4 +140,30 @@ func (c *TokenCache) removeOldest() {
 	key, _ := back.Value.(string)
 	c.ll.Remove(back)
 	delete(c.entries, key)
+}
+
+// cachedToken is a (host, token) pair returned by Drain. The caller uses it to
+// log the token's Centreon session out; the host is carried explicitly because
+// the cache key is a one-way hash and cannot yield it back.
+type cachedToken struct {
+	host  string
+	token string
+}
+
+// Drain removes every entry and returns their (host, token) pairs, then leaves
+// the cache empty. Entries whose TTL has already passed are included on purpose:
+// their Centreon session can outlive the cache TTL, so a graceful shutdown must
+// still attempt to log them out. Drain performs no I/O; the caller does the
+// logouts outside the lock.
+func (c *TokenCache) Drain() []cachedToken {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	drained := make([]cachedToken, 0, len(c.entries))
+	for _, entry := range c.entries {
+		drained = append(drained, cachedToken{host: entry.host, token: entry.token})
+	}
+	c.ll.Init()
+	c.entries = make(map[string]*tokenEntry)
+	return drained
 }
