@@ -62,7 +62,7 @@ func LoadConfig() (Config, error) {
 	}
 
 	switch cfg.AuthMode {
-	case "env", "gateway":
+	case authModeEnv, authModeGateway:
 	default:
 		return Config{}, fmt.Errorf("invalid AUTH_MODE value %q: expected env/gateway", cfg.AuthMode)
 	}

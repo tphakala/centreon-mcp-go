@@ -15,7 +15,15 @@ import (
 // deployments have far fewer distinct credential sets than this.
 const tokenCacheMaxEntries = 4096
 
+// maxCachedHostLen bounds the length of a host string the cache will retain. In
+// gateway mode host comes from an attacker-influenced request header, so caching
+// it adds an attacker-influenced SIZE dimension on top of the entry COUNT that
+// tokenCacheMaxEntries already caps. This ceiling keeps per-entry size bounded
+// too; a real Centreon base URL is far shorter than this.
+const maxCachedHostLen = 2048
+
 type tokenEntry struct {
+	host    string // Centreon host this token authenticates against; needed to log the session out (the cache key is a hash, so host is not recoverable from it)
 	token   string
 	expires time.Time
 	el      *list.Element // position in ll; el.Value holds the map key (string)
@@ -99,6 +107,13 @@ func (c *TokenCache) Get(host, username, password string) (string, bool) {
 // capacity and the key is new, the least-recently-used entry is evicted first,
 // so the cache stays within its fixed bound.
 func (c *TokenCache) Set(host, username, password, token string) {
+	// Refuse to retain an unreasonably large (attacker-influenced) host, so the
+	// bounded cache cannot be inflated in size as well as count. Such a session is
+	// simply not cached; it re-authenticates as needed and self-expires server-side.
+	if len(host) > maxCachedHostLen {
+		return
+	}
+
 	// Hash before taking the lock (see Get): the password is attacker-influenced
 	// and cacheKey is pure, so the hash must not run under the global mutex.
 	key := cacheKey(host, username, password)
@@ -119,7 +134,7 @@ func (c *TokenCache) Set(host, username, password, token string) {
 		c.removeOldest()
 	}
 	el := c.ll.PushFront(key)
-	c.entries[key] = &tokenEntry{token: token, expires: expires, el: el}
+	c.entries[key] = &tokenEntry{host: host, token: token, expires: expires, el: el}
 }
 
 // remove drops a known key/entry pair from both the list and the index.
@@ -139,4 +154,30 @@ func (c *TokenCache) removeOldest() {
 	key, _ := back.Value.(string)
 	c.ll.Remove(back)
 	delete(c.entries, key)
+}
+
+// CachedToken is a (host, token) pair returned by Drain. The caller uses it to
+// log the token's Centreon session out; the host is carried explicitly because
+// the cache key is a one-way hash and cannot yield it back.
+type CachedToken struct {
+	Host  string
+	Token string
+}
+
+// Drain removes every entry and returns their (host, token) pairs, then leaves
+// the cache empty. Entries whose TTL has already passed are included on purpose:
+// their Centreon session can outlive the cache TTL, so a graceful shutdown must
+// still attempt to log them out. Drain performs no I/O; the caller does the
+// logouts outside the lock.
+func (c *TokenCache) Drain() []CachedToken {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	drained := make([]CachedToken, 0, len(c.entries))
+	for _, entry := range c.entries {
+		drained = append(drained, CachedToken{Host: entry.host, Token: entry.token})
+	}
+	c.ll.Init()
+	c.entries = make(map[string]*tokenEntry)
+	return drained
 }
