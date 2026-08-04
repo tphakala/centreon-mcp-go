@@ -227,7 +227,7 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 	case token != "":
 		gwCfg.Token = token
 	case username != "" && password != "":
-		if cached, ok := tokenCache.Get(host, username); ok {
+		if cached, ok := tokenCache.Get(host, username, password); ok {
 			logger.Debug("gateway: using cached token", "host", host)
 			gwCfg.Token = cached
 		} else {
@@ -252,7 +252,7 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		}
 		// Cache the token for subsequent requests
 		if tok := client.Token(); tok != "" {
-			tokenCache.Set(host, username, tok)
+			tokenCache.Set(host, username, password, tok)
 			logger.Debug("gateway: cached token after login", "host", host)
 		}
 	}
