@@ -193,34 +193,24 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 		IdleTimeout:       idleTimeout,
 	}
 
+	// serveCtx lets the shutdown goroutine run cleanup on a ListenAndServe startup
+	// error (e.g. a failed bind) as well as on a signal. In env mode the shared
+	// client has already logged in by this point, so that session must still be
+	// logged out even if the listener never comes up.
+	serveCtx, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
+
 	shutdownDone := make(chan struct{})
-	go func() {
-		defer close(shutdownDone)
-		<-ctx.Done()
-		shutdownCtx, cancelShutdown := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-		defer cancelShutdown()
-		_ = httpServer.Shutdown(shutdownCtx)
-
-		// Best-effort session logout runs on a budget separate from Shutdown's, so a
-		// slow Shutdown cannot leave the logout with an already-expired context. Both
-		// modes use it, so the two paths stay consistent. Shutdown has waited only up
-		// to shutdownTimeout; if it timed out, a straggler request may still hold a
-		// cached token, but the process is exiting, so logging it out is acceptable.
-		logoutCtx, cancelLogout := context.WithTimeout(context.WithoutCancel(ctx), shutdownLogoutTimeout)
-		defer cancelLogout()
-
-		if sharedClient != nil && cfg.Token == "" {
-			_ = sharedClient.Logout(logoutCtx)
-			logger.Info("centreon client logged out")
-		}
-		if tokenCache != nil {
-			drainAndLogout(logoutCtx, tokenCache, cfg, logger, httpClient)
-		}
-	}()
+	go gracefulShutdown(serveCtx, httpServer, sharedClient, tokenCache, cfg, logger, httpClient, shutdownDone)
 
 	logger.Info("centreon-mcp-go HTTP server listening", "addr", addr, "authMode", cfg.AuthMode)
 	err := httpServer.ListenAndServe()
 	if !errors.Is(err, http.ErrServerClosed) {
+		// A startup error (e.g. a failed bind) returns here without ctx being
+		// cancelled. Signal the shutdown goroutine so it still runs cleanup (an
+		// env-mode client may already be logged in), wait for it, then return err.
+		cancelServe()
+		<-shutdownDone
 		return err
 	}
 	// ListenAndServe returns ErrServerClosed as soon as Shutdown is *called*, not
@@ -228,6 +218,39 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 	// drained and cached sessions are logged out before the process exits.
 	<-shutdownDone
 	return nil
+}
+
+// gracefulShutdown waits for serveCtx to be cancelled (a signal or a startup
+// error), shuts the HTTP server down, then logs out the Centreon sessions the
+// server holds: the env-mode shared client or every session in the gateway token
+// cache. It closes done when finished so runHTTP can wait for cleanup before
+// returning.
+func gracefulShutdown(serveCtx context.Context, httpServer *http.Server, sharedClient *centreon.Client, tokenCache *TokenCache, cfg *Config, logger *slog.Logger, httpClient *http.Client, done chan<- struct{}) {
+	defer close(done)
+	<-serveCtx.Done()
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.WithoutCancel(serveCtx), shutdownTimeout)
+	defer cancelShutdown()
+	_ = httpServer.Shutdown(shutdownCtx)
+
+	// Best-effort session logout runs on a budget separate from Shutdown's, so a
+	// slow Shutdown cannot leave the logout with an already-expired context. Both
+	// modes use it, so the two paths stay consistent. Shutdown has waited only up to
+	// shutdownTimeout; if it timed out, a straggler request may still hold a cached
+	// token, but the process is exiting, so logging it out is acceptable.
+	logoutCtx, cancelLogout := context.WithTimeout(context.WithoutCancel(serveCtx), shutdownLogoutTimeout)
+	defer cancelLogout()
+
+	if sharedClient != nil && cfg.Token == "" {
+		if err := sharedClient.Logout(logoutCtx); err != nil {
+			logger.Debug("centreon client logout failed", "error", err)
+		} else {
+			logger.Info("centreon client logged out")
+		}
+	}
+	if tokenCache != nil {
+		drainAndLogout(logoutCtx, tokenCache, cfg, logger, httpClient)
+	}
 }
 
 // gatewayServer creates a per-request MCP server from gateway headers.
@@ -322,7 +345,7 @@ func drainAndLogout(ctx context.Context, tc *TokenCache, cfg *Config, logger *sl
 			break
 		}
 		g.Go(func() error {
-			logoutCachedToken(ctx, ct.host, ct.token, cfg, logger, httpClient)
+			logoutCachedToken(ctx, ct.Host, ct.Token, cfg, logger, httpClient)
 			return nil
 		})
 	}

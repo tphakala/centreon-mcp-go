@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -179,7 +180,7 @@ func TestTokenCache_DrainReturnsAllAndEmpties(t *testing.T) {
 
 	got := make(map[string]string, len(drained))
 	for _, ct := range drained {
-		got[ct.host] = ct.token
+		got[ct.Host] = ct.Token
 	}
 	want := map[string]string{"https://h1": "tok-1", "https://h2": "tok-2", "https://h3": "tok-3"}
 	for h, tok := range want {
@@ -212,8 +213,31 @@ func TestTokenCache_DrainIncludesExpiredEntries(t *testing.T) {
 	if len(drained) != 1 {
 		t.Fatalf("Drain must include TTL-expired entries: got %d, want 1", len(drained))
 	}
-	if drained[0].host != "https://h1" || drained[0].token != "tok-expired" {
+	if drained[0].Host != "https://h1" || drained[0].Token != "tok-expired" {
 		t.Errorf("unexpected drained entry: %+v", drained[0])
+	}
+}
+
+// TestTokenCache_SkipsOverlongHost pins the defensive size bound: an
+// unreasonably large (attacker-influenced) host is not retained, so the bounded
+// cache cannot be inflated in per-entry size, only in count.
+func TestTokenCache_SkipsOverlongHost(t *testing.T) {
+	tc := newTokenCache(50*time.Minute, 10)
+
+	longHost := "https://" + strings.Repeat("a", maxCachedHostLen)
+	tc.Set(longHost, "u", "p", "tok")
+
+	if _, ok := tc.Get(longHost, "u", "p"); ok {
+		t.Error("an overlong host must not be cached")
+	}
+	if n := len(tc.entries); n != 0 {
+		t.Errorf("overlong host should leave the cache empty, got %d entries", n)
+	}
+
+	// A normal host is unaffected.
+	tc.Set("https://ok.example.com", "u", "p", "tok")
+	if _, ok := tc.Get("https://ok.example.com", "u", "p"); !ok {
+		t.Error("a normal host should still be cached")
 	}
 }
 

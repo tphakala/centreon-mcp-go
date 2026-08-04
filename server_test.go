@@ -263,6 +263,54 @@ func TestRunHTTP_GatewayLogsOutCachedSessionsOnShutdown(t *testing.T) {
 	}
 }
 
+// TestRunHTTP_LogsOutEnvClientOnBindError pins that when the HTTP listener fails
+// to start, runHTTP still logs out an env-mode client that already logged in at
+// startup (rather than leaking that Centreon session) and returns the bind error.
+func TestRunHTTP_LogsOutEnvClientOnBindError(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	var logouts atomic.Int32
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("POST /centreon/api/latest/login", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"security": map[string]any{"token": "tok-env"}})
+	})
+	fakeMux.HandleFunc("GET /centreon/api/latest/logout", func(w http.ResponseWriter, _ *http.Request) {
+		logouts.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	// Hold a port open so runHTTP's ListenAndServe fails to bind it.
+	var lc net.ListenConfig
+	occupied, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy port: %v", err)
+	}
+	defer func() { _ = occupied.Close() }()
+	addr, ok := occupied.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address is not *net.TCPAddr: %T", occupied.Addr())
+	}
+
+	cfg := &Config{
+		Host:      fake.URL,
+		Username:  "admin",
+		Password:  "secret",
+		Transport: transportHTTP,
+		AuthMode:  authModeEnv,
+		HTTPHost:  "127.0.0.1",
+		HTTPPort:  addr.Port,
+	}
+
+	if err := runHTTP(t.Context(), cfg, logger, nil); err == nil {
+		t.Fatal("runHTTP should return the bind error, got nil")
+	}
+	if got := logouts.Load(); got != 1 {
+		t.Errorf("env client should be logged out on bind error, got %d logouts", got)
+	}
+}
+
 // freePort reserves an ephemeral TCP port and releases it, returning the number
 // so runHTTP can bind it. A small TOCTOU window is acceptable for a local test.
 func freePort(t *testing.T) int {
