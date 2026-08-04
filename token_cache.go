@@ -31,8 +31,16 @@ func NewTokenCache(ttl time.Duration) *TokenCache {
 }
 
 func cacheKey(host, username, password string) string {
-	h := sha256.Sum256([]byte(host + "\x00" + username + "\x00" + password))
-	return fmt.Sprintf("%x", h)
+	// Stream each field into the hash separately (NUL-separated) rather than
+	// building one concatenated string, to avoid an extra in-memory copy of the
+	// plaintext password. hash.Hash.Write never returns an error.
+	h := sha256.New()
+	_, _ = h.Write([]byte(host))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(username))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(password))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // Get returns a cached token if it exists and hasn't expired. The password is
