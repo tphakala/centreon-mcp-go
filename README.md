@@ -171,7 +171,7 @@ On graceful shutdown (SIGINT/SIGTERM) the server logs out the Centreon sessions 
 
 ### Host allowlist
 
-By default gateway mode connects to whatever `X-Centreon-Host` a caller supplies, so an exposed endpoint can be used as an SSRF or open-proxy primitive. Set `CENTREON_ALLOWED_HOSTS` to a comma-separated list of permitted host URLs to restrict this; requests whose `X-Centreon-Host` does not match an entry exactly are rejected. When the variable is unset or empty, behavior is unchanged (any host is accepted) and the server logs a warning at startup. Matching is exact and case-sensitive, so list each host URL as callers send it.
+By default gateway mode connects to whatever `X-Centreon-Host` a caller supplies, so an exposed endpoint can be used as an SSRF or open-proxy primitive. Set `CENTREON_ALLOWED_HOSTS` to a comma-separated list of permitted host URLs to restrict this; requests whose `X-Centreon-Host` does not match an entry exactly are rejected. When the variable is unset or empty, behavior is unchanged (any host is accepted) and the server logs a warning at startup. Matching is exact and case-sensitive, so list each host URL as callers send it. The allowlist is enforced only in gateway mode; under any other mode (stdio, or `http` with `env` auth) a configured `CENTREON_ALLOWED_HOSTS` restricts nothing, and the server logs a startup warning so the ineffective setting is visible.
 
 ```bash
 export CENTREON_ALLOWED_HOSTS="https://centreon.example.com,https://centreon2.example.com"

@@ -100,7 +100,7 @@ func LoadConfig() (Config, error) {
 	// in. In HTTP gateway mode CENTREON_HOST is an unused placeholder and the real
 	// hosts arrive per request via X-Centreon-Host, so its scheme is not validated
 	// here (gatewayServer validates each header value instead).
-	if !gatewayOnlyHost(&cfg) {
+	if !gatewayMode(&cfg) {
 		if err := validateHostScheme(cfg.Host, cfg.AllowHTTP); err != nil {
 			return Config{}, fmt.Errorf("CENTREON_HOST: %w", err)
 		}
@@ -187,13 +187,13 @@ func parseBoolEnv(name string) (bool, error) {
 	return v, nil
 }
 
-// gatewayOnlyHost reports whether CENTREON_HOST is a required-but-unused
-// placeholder for this configuration. In HTTP gateway mode the effective
-// Centreon hosts come from the per-request X-Centreon-Host header, so
-// CENTREON_HOST is never used to reach Centreon. Every other mode (stdio, or
-// HTTP with env auth) uses CENTREON_HOST directly, so the check requires both
-// the http transport and gateway auth mode.
-func gatewayOnlyHost(cfg *Config) bool {
+// gatewayMode reports whether the server runs in HTTP gateway mode: http
+// transport with gateway auth. This is the only mode where the effective
+// Centreon hosts arrive per request via the X-Centreon-Host header (so
+// CENTREON_HOST is an unused placeholder) and the only mode that enforces the
+// CENTREON_ALLOWED_HOSTS allowlist. Every other mode (stdio, or HTTP with env
+// auth) uses CENTREON_HOST directly and never enforces the allowlist.
+func gatewayMode(cfg *Config) bool {
 	return cfg.Transport == transportHTTP && cfg.AuthMode == authModeGateway
 }
 
