@@ -320,6 +320,11 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		return nil
 	}
 
+	if err := validateHostScheme(host, cfg.AllowHTTP); err != nil {
+		logger.Error("gateway: host scheme rejected", "host", safeHost(host), "error", err)
+		return nil
+	}
+
 	gwCfg := &Config{
 		Host:            host,
 		AllowSelfSigned: cfg.AllowSelfSigned,

@@ -62,6 +62,7 @@ All configuration is via environment variables.
 | `CENTREON_PASSWORD`         | *        | (none)      | Password for session-based authentication                    |
 | `CENTREON_TOKEN`            | *        | (none)      | API token (alternative to username + password)               |
 | `CENTREON_ALLOW_SELF_SIGNED`| No       | `false`     | Accept self-signed TLS certificates                          |
+| `CENTREON_ALLOW_HTTP`       | No       | `false`     | Permit cleartext `http://` Centreon URLs. Off by default; `http` sends credentials unencrypted (CWE-319). |
 | `MCP_TRANSPORT`             | No       | `stdio`     | Transport mode: `stdio` or `http`                            |
 | `MCP_HTTP_PORT`             | No       | `8080`      | HTTP listen port (HTTP transport only)                       |
 | `MCP_HTTP_HOST`             | No       | `0.0.0.0`   | HTTP listen address (HTTP transport only)                    |
@@ -72,6 +73,8 @@ All configuration is via environment variables.
 \* Either `CENTREON_TOKEN` or both `CENTREON_USERNAME` and `CENTREON_PASSWORD` must be set. In `gateway` auth mode, credentials are supplied per-request via headers instead.
 
 > **Note on redirects:** to protect the session token, the server never follows an HTTP redirect to a different host. Point `CENTREON_HOST` (and, in gateway mode, `X-Centreon-Host`) at the URL that serves the Centreon API directly. A host that redirects to a different hostname (for example an apex-to-`www` or a vanity-to-backend redirect) makes requests fail with `refusing cross-host redirect`; use the final resolved URL instead. Same-host redirects, including an `http` to `https` upgrade, are still followed.
+
+> **Note on transport security:** to keep credentials off the wire, the server rejects a cleartext `http://` `CENTREON_HOST` (except in gateway mode, where it is an unused placeholder), `CENTREON_ALLOWED_HOSTS` entry, or gateway `X-Centreon-Host` value (CWE-319); use `https://`. For a trusted LAN or loopback deployment you can opt back in with `CENTREON_ALLOW_HTTP=true`, but credentials then travel unencrypted. Upgrading an existing `http://` deployment requires setting this flag; every `CENTREON_ALLOWED_HOSTS` entry must include a scheme (`https://`, or `http://` with the flag set).
 
 ## Usage with Claude Code
 
@@ -153,7 +156,7 @@ Configure your MCP client to connect to `http://localhost:8080/mcp`.
 
 Gateway mode is for multi-tenant or shared deployments where each request carries its own Centreon credentials. The server creates a per-request Centreon client authenticated with the supplied credentials.
 
-Enable it with `AUTH_MODE=gateway` alongside `MCP_TRANSPORT=http`. In this mode, `CENTREON_HOST`, `CENTREON_USERNAME`, `CENTREON_PASSWORD`, and `CENTREON_TOKEN` are not required at startup; they are provided per request via HTTP headers.
+Enable it with `AUTH_MODE=gateway` alongside `MCP_TRANSPORT=http`. The effective Centreon host and credentials arrive per request via HTTP headers. `CENTREON_HOST` and a startup credential (`CENTREON_TOKEN`, or `CENTREON_USERNAME` + `CENTREON_PASSWORD`) are still required by `LoadConfig` but act only as placeholders. `CENTREON_HOST`'s scheme is not validated in gateway mode; each `X-Centreon-Host` is validated per request instead.
 
 | Header                  | Description                                         |
 |-------------------------|-----------------------------------------------------|

@@ -61,6 +61,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	t.Setenv("CENTREON_PASSWORD", "secret")
 	t.Setenv("CENTREON_TOKEN", "")
 	t.Setenv("CENTREON_ALLOW_SELF_SIGNED", "")
+	t.Setenv("CENTREON_ALLOW_HTTP", "")
 	t.Setenv("MCP_TRANSPORT", "")
 	t.Setenv("MCP_HTTP_PORT", "")
 	t.Setenv("MCP_HTTP_HOST", "")
@@ -89,6 +90,9 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	}
 	if cfg.AllowSelfSigned {
 		t.Error("expected default AllowSelfSigned false")
+	}
+	if cfg.AllowHTTP {
+		t.Error("expected default AllowHTTP false")
 	}
 }
 
@@ -230,6 +234,164 @@ func TestLoadConfig_HTTPPort(t *testing.T) {
 			}
 			if cfg.HTTPPort != tt.want {
 				t.Errorf("HTTPPort = %d, want %d", cfg.HTTPPort, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidateHostScheme pins the cleartext-credential guard (CWE-319): https is
+// always accepted, http only with the opt-in, and a missing or unsupported
+// scheme (or an unparseable URL) is rejected outright.
+func TestValidateHostScheme(t *testing.T) {
+	tests := []struct {
+		name      string
+		host      string
+		allowHTTP bool
+		wantErr   string // substring to find; "" means expect nil
+		notWant   string // substring the error must NOT contain (credential redaction)
+	}{
+		{"https accepted", "https://centreon.example.com", false, "", ""},
+		{"https uppercase scheme accepted", "HTTPS://centreon.example.com", false, "", ""},
+		{"https ipv6 accepted", "https://[::1]:8443", false, "", ""},
+		{"https with userinfo accepted", "https://admin:sekret@centreon.example.com", false, "", ""},
+		{"http rejected by default", "http://centreon.example.com", false, "CWE-319", ""},
+		{"http uppercase rejected by default", "HTTP://centreon.example.com", false, "CWE-319", ""},
+		{"http accepted with opt-in", "http://centreon.example.com", true, "", ""},
+		{"http userinfo rejected with password redacted", "http://admin:sekret@centreon.example.com", false, "CWE-319", "sekret"},
+		{"missing scheme rejected", "centreon.example.com", false, "must include a scheme", ""},
+		{"unsupported scheme rejected", "ftp://centreon.example.com", false, "unsupported scheme", ""},
+		{"host:port without scheme rejected as unsupported", "centreon.example.com:443", false, "unsupported scheme", ""},
+		{"unparseable host rejected", "127.0.0.1:8080", false, "invalid host url", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateHostScheme(tt.host, tt.allowHTTP)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("validateHostScheme(%q, %v) = %v, want nil", tt.host, tt.allowHTTP, err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("validateHostScheme(%q, %v) = %v, want error containing %q", tt.host, tt.allowHTTP, err, tt.wantErr)
+			}
+			if tt.notWant != "" && err != nil && strings.Contains(err.Error(), tt.notWant) {
+				t.Errorf("validateHostScheme(%q) error must not leak %q, got %v", tt.host, tt.notWant, err)
+			}
+		})
+	}
+}
+
+// TestSafeHost pins that safeHost masks a userinfo password (so it cannot reach
+// logs or error messages, CWE-532) while leaving plain and unparseable hosts
+// unchanged.
+func TestSafeHost(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{"masks password in http userinfo", "http://admin:sekret@centreon.example.com", "http://admin:xxxxx@centreon.example.com"},
+		{"masks password in https userinfo", "https://admin:sekret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		{"leaves plain host unchanged", "https://centreon.example.com", "https://centreon.example.com"},
+		{"passes through unparseable host", "127.0.0.1:8080", "127.0.0.1:8080"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := safeHost(tt.host); got != tt.want {
+				t.Errorf("safeHost(%q) = %q, want %q", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoadConfig_HostScheme pins that CENTREON_HOST is scheme-checked at load,
+// gated by CENTREON_ALLOW_HTTP, and skipped only in HTTP gateway mode where the
+// host is an unused placeholder. It also pins that stdio+gateway still validates,
+// so the skip requires BOTH the http transport and gateway auth mode.
+func TestLoadConfig_HostScheme(t *testing.T) {
+	tests := []struct {
+		name          string
+		host          string
+		transport     string
+		authMode      string
+		allowHTTP     string
+		wantErr       string // "" = no error
+		wantAllowHTTP bool
+	}{
+		{"https host accepted", "https://h.example.com", "", "", "", "", false},
+		{"http host rejected by default", "http://h.example.com", "", "", "", "CENTREON_HOST", false},
+		{"http host accepted with opt-in", "http://h.example.com", "", "", "true", "", true},
+		{"invalid allow-http value errors", "https://h.example.com", "", "", "banana", "CENTREON_ALLOW_HTTP", false},
+		{"gateway mode skips http host check", "http://placeholder.example.com", "http", "gateway", "", "", false},
+		{"http transport env auth still validates http host", "http://h.example.com", "http", "env", "", "CENTREON_HOST", false},
+		{"stdio with gateway auth still validates http host", "http://h.example.com", "stdio", "gateway", "", "CENTREON_HOST", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CENTREON_HOST", tt.host)
+			t.Setenv("CENTREON_TOKEN", "tok")
+			t.Setenv("CENTREON_USERNAME", "")
+			t.Setenv("CENTREON_PASSWORD", "")
+			t.Setenv("CENTREON_ALLOWED_HOSTS", "")
+			t.Setenv("MCP_HTTP_PORT", "")
+			t.Setenv("MCP_TRANSPORT", tt.transport)
+			t.Setenv("AUTH_MODE", tt.authMode)
+			t.Setenv("CENTREON_ALLOW_HTTP", tt.allowHTTP)
+
+			cfg, err := LoadConfig()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("LoadConfig() error = %v, want error containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfig() unexpected error: %v", err)
+			}
+			if cfg.AllowHTTP != tt.wantAllowHTTP {
+				t.Errorf("AllowHTTP = %v, want %v", cfg.AllowHTTP, tt.wantAllowHTTP)
+			}
+		})
+	}
+}
+
+// TestLoadConfig_AllowedHostsScheme pins that each CENTREON_ALLOWED_HOSTS entry
+// is scheme-checked at load, gated by CENTREON_ALLOW_HTTP.
+func TestLoadConfig_AllowedHostsScheme(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		allowHTTP string
+		wantErr   string // "" = no error
+	}{
+		{"all https accepted", "https://a.example.com,https://b.example.com", "", ""},
+		{"http entry rejected by default", "https://a.example.com,http://b.example.com", "", "CENTREON_ALLOWED_HOSTS"},
+		{"http entry accepted with opt-in", "https://a.example.com,http://b.example.com", "true", ""},
+		{"scheme-less entry rejected", "a.example.com", "", "CENTREON_ALLOWED_HOSTS"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CENTREON_HOST", "https://centreon.example.com")
+			t.Setenv("CENTREON_TOKEN", "tok")
+			t.Setenv("CENTREON_USERNAME", "")
+			t.Setenv("CENTREON_PASSWORD", "")
+			t.Setenv("MCP_TRANSPORT", "")
+			t.Setenv("AUTH_MODE", "")
+			t.Setenv("MCP_HTTP_PORT", "")
+			t.Setenv("CENTREON_ALLOW_HTTP", tt.allowHTTP)
+			t.Setenv("CENTREON_ALLOWED_HOSTS", tt.value)
+
+			_, err := LoadConfig()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("LoadConfig() error = %v, want error containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfig() unexpected error: %v", err)
 			}
 		})
 	}
