@@ -125,6 +125,64 @@ func TestLogoutCachedToken_SendsTokenToLogoutEndpoint(t *testing.T) {
 	}
 }
 
+// roundTripFunc adapts a function to http.RoundTripper so a test can observe the
+// request an http.Client is about to send.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestLogoutClientBounded_BoundsLogoutWithDeadline pins issue #38: the stdio
+// shutdown logout must run on a bounded, cancel-immune context. Graceful shutdown
+// cancels the parent ctx, so the logout runs on context.WithoutCancel to survive
+// that cancellation, but it must still carry a deadline (shutdownLogoutTimeout) so
+// an unreachable Centreon cannot block process exit. The test drives a client
+// whose transport records whether the logout request carried a deadline and
+// asserts one is present even though the parent ctx is already cancelled. The
+// http.Client sets no Timeout of its own, so the only possible source of a request
+// deadline is the bounded logout context under test.
+func TestLogoutClientBounded_BoundsLogoutWithDeadline(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	var logoutCount atomic.Int32
+	var hadDeadline atomic.Bool
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /centreon/api/latest/logout", func(w http.ResponseWriter, _ *http.Request) {
+		logoutCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if _, ok := r.Context().Deadline(); ok {
+				hadDeadline.Store(true)
+			}
+			return http.DefaultTransport.RoundTrip(r)
+		}),
+	}
+
+	client, err := newCentreonClient(srv.URL, &Config{Token: "tok-xyz"}, logger, httpClient)
+	if err != nil {
+		t.Fatalf("newCentreonClient: %v", err)
+	}
+
+	// Simulate graceful shutdown: the parent context is already cancelled when the
+	// deferred logout fires.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	logoutClientBounded(ctx, client, logger)
+
+	if n := logoutCount.Load(); n != 1 {
+		t.Fatalf("bounded logout must still call GET /logout once despite a cancelled parent ctx, got %d", n)
+	}
+	if !hadDeadline.Load() {
+		t.Error("stdio shutdown logout must bound the logout with a deadline (issue #38); the request carried none")
+	}
+}
+
 // TestDrainAndLogout_LogsOutEveryCachedTokenAndEmptiesCache pins the #5 shutdown
 // behaviour end to end: every token in the cache is logged out on the Centreon
 // server and the cache is left empty.
