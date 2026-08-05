@@ -116,7 +116,7 @@ func TestLogoutCachedToken_SendsTokenToLogoutEndpoint(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	logoutCachedToken(t.Context(), srv.URL, "tok-xyz", &Config{}, logger, nil)
+	logoutCachedToken(t.Context(), srv.URL, "tok-xyz", logger, nil)
 
 	if n := logoutCount.Load(); n != 1 {
 		t.Fatalf("expected exactly 1 logout call, got %d", n)
@@ -207,7 +207,7 @@ func TestDrainAndLogout_LogsOutEveryCachedTokenAndEmptiesCache(t *testing.T) {
 	cache.Set(srv.URL, "admin", "p2", "tok-2")
 	cache.Set(srv.URL, "admin", "p3", "tok-3")
 
-	drainAndLogout(t.Context(), cache, &Config{}, logger, nil)
+	drainAndLogout(t.Context(), cache, logger, nil)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -242,7 +242,7 @@ func TestDrainAndLogout_SwallowsLogoutFailuresAndEmptiesCache(t *testing.T) {
 	cache.Set(srv.URL, "admin", "p2", "tok-2")
 	cache.Set(srv.URL, "admin", "p3", "tok-3")
 
-	drainAndLogout(t.Context(), cache, &Config{}, logger, nil)
+	drainAndLogout(t.Context(), cache, logger, nil)
 
 	if got := attempts.Load(); got != 3 {
 		t.Errorf("every cached session should be attempted despite failures: got %d, want 3", got)
@@ -738,6 +738,44 @@ func TestRun_EnvLoginRefusesCrossHostRedirect(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "centreon login") || !strings.Contains(err.Error(), "cross-host redirect") {
 		t.Errorf("want a login error caused by the cross-host redirect guard, got: %v", err)
+	}
+}
+
+// TestNewCentreonClient_AllowSelfSignedDoesNotBypassRedirectGuard pins issue #39:
+// newCentreonClient must route every request through the shared, redirect-guarded
+// httpClient it is given and must NOT read cfg.AllowSelfSigned. Self-signed TLS is
+// applied once on that shared client by newHTTPClient; wiring cfg.AllowSelfSigned
+// into a per-client transport here would build a second client that bypasses the
+// cross-host redirect guard and reopen the X-AUTH-TOKEN leak (CWE-522, #36). So
+// even with AllowSelfSigned set, a cross-host login redirect must still be refused.
+func TestNewCentreonClient_AllowSelfSignedDoesNotBypassRedirectGuard(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /centreon/api/latest/login", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://other.invalid/steal", http.StatusFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	httpClient, err := newHTTPClient(false)
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+
+	// AllowSelfSigned is deliberately set: newCentreonClient must ignore it and use
+	// the guarded httpClient, so the cross-host redirect is still refused.
+	client, err := newCentreonClient(srv.URL, &Config{Username: "admin", Password: "secret", AllowSelfSigned: true}, nil, httpClient)
+	if err != nil {
+		t.Fatalf("newCentreonClient: %v", err)
+	}
+
+	err = client.Login(t.Context())
+	if err == nil {
+		t.Fatal("login must refuse the cross-host redirect via the shared guarded client, got nil")
+	}
+	if !strings.Contains(err.Error(), "cross-host redirect") {
+		t.Errorf("want a cross-host redirect error (shared guard in effect despite AllowSelfSigned), got: %v", err)
 	}
 }
 
