@@ -11,6 +11,7 @@ Exposes 88 tools covering real-time monitoring, host and service configuration, 
 - **Structured JSON logging** via `log/slog` with configurable levels
 - **Gateway mode with token cache**: per-request Centreon credentials via HTTP headers, with a 50-minute token cache to avoid repeated logins
 - **Self-signed certificate support**: opt-in via `CENTREON_ALLOW_SELF_SIGNED`
+- **Cross-host redirect protection**: the Centreon session token (`X-AUTH-TOKEN`) is never forwarded across an HTTP redirect to a different host, preventing credential leakage (CWE-522)
 
 ## Requirements
 
@@ -69,6 +70,8 @@ All configuration is via environment variables.
 | `LOG_LEVEL`                 | No       | `info`      | Log level: `debug`, `info`, `warn`, or `error`               |
 
 \* Either `CENTREON_TOKEN` or both `CENTREON_USERNAME` and `CENTREON_PASSWORD` must be set. In `gateway` auth mode, credentials are supplied per-request via headers instead.
+
+> **Note on redirects:** to protect the session token, the server never follows an HTTP redirect to a different host. Point `CENTREON_HOST` (and, in gateway mode, `X-Centreon-Host`) at the URL that serves the Centreon API directly. A host that redirects to a different hostname (for example an apex-to-`www` or a vanity-to-backend redirect) makes requests fail with `refusing cross-host redirect`; use the final resolved URL instead. Same-host redirects, including an `http` to `https` upgrade, are still followed.
 
 ## Usage with Claude Code
 

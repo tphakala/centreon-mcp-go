@@ -428,3 +428,241 @@ func TestGatewayServer_TokenCachePinsPassword(t *testing.T) {
 		t.Fatalf("request 3: wrong password must force a fresh login (expected 2 total), got %d", n)
 	}
 }
+
+// --- Issue #36: cross-host redirects must not leak the X-AUTH-TOKEN header ---
+
+// TestNoCrossHostRedirect pins the redirect policy directly: redirects that stay
+// on the original request host are allowed (so trailing-slash normalisation,
+// http->https upgrade, and same-host port changes keep working), and a redirect
+// to a different host is refused. The anchor is the ORIGINAL request (via[0]),
+// not the previous hop, so a chain cannot be walked off the original host one
+// same-looking hop at a time.
+func TestNoCrossHostRedirect(t *testing.T) {
+	t.Parallel()
+
+	req := func(rawURL string) *http.Request {
+		return httptest.NewRequestWithContext(t.Context(), http.MethodGet, rawURL, http.NoBody)
+	}
+
+	tests := []struct {
+		name    string
+		target  string
+		via     []*http.Request
+		wantErr string // substring to find; "" means expect nil
+	}{
+		{"same host is allowed", "http://centreon.example.com/api", []*http.Request{req("http://centreon.example.com/login")}, ""},
+		{"http to https on same host is allowed", "https://centreon.example.com/api", []*http.Request{req("http://centreon.example.com/login")}, ""},
+		{"same host different port is allowed", "https://centreon.example.com:8443/api", []*http.Request{req("http://centreon.example.com:8080/login")}, ""},
+		{"host match is case-insensitive", "http://Centreon.Example.COM/api", []*http.Request{req("http://centreon.example.com/login")}, ""},
+		{"empty via is allowed defensively", "http://centreon.example.com/api", nil, ""},
+		{"different host is refused", "http://evil.example.com/api", []*http.Request{req("http://centreon.example.com/login")}, "cross-host redirect"},
+		// Discriminates the via[0] anchor from a previous-hop anchor: the last hop
+		// matches the target, so anchoring on the previous hop would WRONGLY allow
+		// this; only anchoring on the original host (via[0]) refuses it.
+		{"anchored on the original host across a hostname change", "http://mid.example.com/x", []*http.Request{req("http://centreon.example.com/"), req("http://mid.example.com/a")}, "cross-host redirect"},
+		// Host-spoof via userinfo: url.Parse puts "centreon.example.com" in the
+		// userinfo and the real host is evil.example.com. A naive raw-string or
+		// substring check on the URL would be fooled by the userinfo; Hostname()
+		// returns the real host, so the guard must still refuse.
+		{"userinfo in the target does not spoof the host", "http://centreon.example.com@evil.example.com/", []*http.Request{req("http://centreon.example.com/login")}, "cross-host redirect"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := noCrossHostRedirect(req(tt.target), tt.via)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("noCrossHostRedirect(%s) = %v, want nil", tt.target, err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("noCrossHostRedirect(%s) = %v, want error containing %q", tt.target, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestNoCrossHostRedirect_CapsChain pins that the policy stops a chain after
+// maxRedirects hops, matching net/http's default cap that a custom CheckRedirect
+// would otherwise remove. The target is same-host so ONLY the length cap can
+// produce the error: if the cap check is missing, the host check passes and the
+// function wrongly returns nil.
+func TestNoCrossHostRedirect_CapsChain(t *testing.T) {
+	t.Parallel()
+
+	via := make([]*http.Request, maxRedirects)
+	for i := range via {
+		via[i] = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://centreon.example.com/", http.NoBody)
+	}
+	err := noCrossHostRedirect(httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://centreon.example.com/next", http.NoBody), via)
+	if err == nil || !strings.Contains(err.Error(), "stopped after") {
+		t.Errorf("noCrossHostRedirect with %d prior hops = %v, want a redirect-cap error", maxRedirects, err)
+	}
+}
+
+// TestNewHTTPClient_Wiring pins that every client the server builds carries the
+// redirect policy and the shared timeout, and that the self-signed variant
+// disables TLS verification on a cloned transport.
+func TestNewHTTPClient_Wiring(t *testing.T) {
+	t.Parallel()
+
+	plain, err := newHTTPClient(false)
+	if err != nil {
+		t.Fatalf("newHTTPClient(false): %v", err)
+	}
+	if plain.CheckRedirect == nil {
+		t.Error("plain client must set CheckRedirect so redirects are policed")
+	}
+	if plain.Timeout != httpClientTimeout {
+		t.Errorf("plain client timeout = %v, want %v", plain.Timeout, httpClientTimeout)
+	}
+
+	selfSigned, err := newHTTPClient(true)
+	if err != nil {
+		t.Fatalf("newHTTPClient(true): %v", err)
+	}
+	if selfSigned.CheckRedirect == nil {
+		t.Error("self-signed client must also set CheckRedirect")
+	}
+	transport, ok := selfSigned.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("self-signed client transport = %T, want *http.Transport", selfSigned.Transport)
+	}
+	if transport.TLSClientConfig == nil || !transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("self-signed client must skip TLS verification")
+	}
+}
+
+// TestNewHTTPClient_FollowsSameHostRedirect proves the policy does not
+// over-block: a same-host 302 is still followed to completion through the real
+// client newHTTPClient builds.
+func TestNewHTTPClient_FollowsSameHostRedirect(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/final", http.StatusFound)
+	})
+	mux.HandleFunc("/final", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	hc, err := newHTTPClient(false)
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/start", http.NoBody)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		t.Fatalf("same-host redirect should be followed, got error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("want 200 after same-host redirect, got %d", resp.StatusCode)
+	}
+}
+
+// TestNewHTTPClient_BlocksCrossHostRedirect proves the token-leak vector is
+// closed end to end: a redirect to a different host is refused before the client
+// dials the target, so the X-AUTH-TOKEN header never reaches another origin.
+// other.invalid is unresolvable by RFC 2606, so the test only passes if
+// CheckRedirect rejects the hop before any dial or DNS lookup is attempted.
+func TestNewHTTPClient_BlocksCrossHostRedirect(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://other.invalid/steal", http.StatusFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	hc, err := newHTTPClient(false)
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/start", http.NoBody)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := hc.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("cross-host redirect must be refused, got nil error")
+	}
+	if !strings.Contains(err.Error(), "cross-host redirect") {
+		t.Errorf("want a cross-host redirect error, got: %v", err)
+	}
+}
+
+// TestNewHTTPClient_StopsRedirectLoop proves a same-host redirect loop is bounded
+// by the maxRedirects cap through the real client instead of spinning forever.
+func TestNewHTTPClient_StopsRedirectLoop(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/loop", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/loop", http.StatusFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	hc, err := newHTTPClient(false)
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/loop", http.NoBody)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := hc.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("same-host redirect loop must be stopped, got nil error")
+	}
+	if !strings.Contains(err.Error(), "stopped after") {
+		t.Errorf("want a redirect-cap error, got: %v", err)
+	}
+}
+
+// TestRun_EnvLoginRefusesCrossHostRedirect pins the always-supply-client change:
+// run must build the guarded HTTP client for every mode, so an env-mode startup
+// login whose endpoint redirects to another host fails with the redirect guard
+// rather than following the redirect and leaking the credentials. The login
+// fails before any listener binds, so no port is needed.
+func TestRun_EnvLoginRefusesCrossHostRedirect(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.DiscardHandler)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /centreon/api/latest/login", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://other.invalid/", http.StatusFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := &Config{
+		Host:      srv.URL,
+		Username:  "admin",
+		Password:  "secret",
+		Transport: transportHTTP,
+		AuthMode:  authModeEnv,
+		HTTPHost:  "127.0.0.1",
+	}
+
+	err := run(t.Context(), cfg, logger)
+	if err == nil {
+		t.Fatal("run should fail when the startup login redirects cross-host, got nil")
+	}
+	if !strings.Contains(err.Error(), "centreon login") || !strings.Contains(err.Error(), "cross-host redirect") {
+		t.Errorf("want a login error caused by the cross-host redirect guard, got: %v", err)
+	}
+}

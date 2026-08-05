@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,7 +29,12 @@ const (
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 15 * time.Second
 	tokenCacheTTL     = 50 * time.Minute
-	selfSignedTimeout = 30 * time.Second
+	httpClientTimeout = 30 * time.Second
+
+	// maxRedirects caps a redirect chain, matching net/http's default policy that
+	// noCrossHostRedirect replaces: installing a custom CheckRedirect removes the
+	// stdlib's own 10-redirect cap, so the policy must re-impose one.
+	maxRedirects = 10
 
 	authModeEnv     = "env"
 	authModeGateway = "gateway"
@@ -55,23 +61,68 @@ func buildServer(client *centreon.Client, logger *slog.Logger) *mcp.Server {
 	return s
 }
 
-// selfSignedHTTPClient creates a reusable HTTP client that accepts self-signed certificates.
-// Called once at startup; the returned client is shared across all requests.
-func selfSignedHTTPClient() (*http.Client, error) {
-	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return nil, fmt.Errorf("unexpected default transport type")
+// noCrossHostRedirect is an http.Client CheckRedirect policy that refuses any
+// redirect whose target host differs from the original request's host. The
+// centreon client sets X-AUTH-TOKEN on every request, and Go does NOT strip
+// custom headers on cross-origin redirects (unlike Authorization or Cookie), so
+// without this guard a compromised or misconfigured Centreon host could redirect
+// an API call to another origin and leak the session token (CWE-522).
+//
+// The comparison anchors on via[0] (the original request), so every hop must
+// stay on the original host; a chain cannot be walked off-host one same-looking
+// hop at a time. It compares Hostname() only, ignoring scheme and port, so
+// same-host behaviours such as trailing-slash normalisation and an http->https
+// upgrade keep working. The match is an exact hostname (case-insensitive),
+// intentionally stricter than net/http's domain-or-subdomain rule: a redirect to
+// a different subdomain is refused (fail-closed for a credential header). A
+// same-host https->http downgrade is still allowed here; cleartext transport is
+// out of scope for this fix and owned by issue #28.
+//
+// net/http invokes CheckRedirect only while following a redirect, so via always
+// holds at least the original request; the len(via)==0 guard is defensive
+// against any future direct caller.
+func noCrossHostRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) == 0 {
+		return nil
 	}
-	transport := defaultTransport.Clone()
-	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested self-signed cert support
-	return &http.Client{
-		Timeout:   selfSignedTimeout,
-		Transport: transport,
-	}, nil
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	origin := via[0].URL.Hostname()
+	if target := req.URL.Hostname(); !strings.EqualFold(target, origin) {
+		return fmt.Errorf("refusing cross-host redirect from %q to %q", origin, target)
+	}
+	return nil
 }
 
-// newCentreonClient creates a centreon.Client with the given config.
-// httpClient may be nil; if non-nil it is used for all HTTP requests (e.g. self-signed TLS).
+// newHTTPClient builds the HTTP client shared by every Centreon request. It
+// always installs noCrossHostRedirect so the X-AUTH-TOKEN header cannot leak
+// across a cross-host redirect (see that function). When allowSelfSigned is set
+// it clones http.DefaultTransport and disables TLS verification for self-signed
+// Centreon instances; cloning (rather than mutating the shared default) both
+// avoids polluting other users of http.DefaultTransport and preserves settings
+// like ForceAttemptHTTP2.
+func newHTTPClient(allowSelfSigned bool) (*http.Client, error) {
+	hc := &http.Client{
+		Timeout:       httpClientTimeout,
+		CheckRedirect: noCrossHostRedirect,
+	}
+	if allowSelfSigned {
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, fmt.Errorf("unexpected default transport type")
+		}
+		transport := defaultTransport.Clone()
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested self-signed cert support
+		hc.Transport = transport
+	}
+	return hc, nil
+}
+
+// newCentreonClient creates a centreon.Client with the given config. In
+// production httpClient is always the newHTTPClient product, so the cross-host
+// redirect guard and shared timeout apply to every request; it may be nil in
+// tests, in which case the dependency's default client (no redirect guard) is used.
 func newCentreonClient(host string, cfg *Config, logger *slog.Logger, httpClient *http.Client) (*centreon.Client, error) {
 	opts := []centreon.Option{}
 	if cfg.Token != "" {
@@ -92,14 +143,13 @@ func newCentreonClient(host string, cfg *Config, logger *slog.Logger, httpClient
 func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	logger.Info("centreon-mcp-go starting", "version", version, "transport", cfg.Transport)
 
-	// Create self-signed HTTP client once, shared across all requests.
-	var httpClient *http.Client
-	if cfg.AllowSelfSigned {
-		var err error
-		httpClient, err = selfSignedHTTPClient()
-		if err != nil {
-			return fmt.Errorf("creating self-signed HTTP client: %w", err)
-		}
+	// One HTTP client, shared across all requests. It always installs the
+	// cross-host redirect guard (X-AUTH-TOKEN must not leak, CWE-522) and, when
+	// configured, self-signed TLS support. Building it here means every mode
+	// (stdio, env HTTP, gateway per-request, shutdown logout) gets the guard.
+	httpClient, err := newHTTPClient(cfg.AllowSelfSigned)
+	if err != nil {
+		return fmt.Errorf("creating HTTP client: %w", err)
 	}
 
 	switch cfg.Transport {
