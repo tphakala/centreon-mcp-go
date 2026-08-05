@@ -173,15 +173,36 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient 
 		if err := client.Login(ctx); err != nil {
 			return fmt.Errorf("centreon login: %w", err)
 		}
-		defer func() {
-			_ = client.Logout(context.WithoutCancel(ctx))
-		}()
+		defer logoutClientBounded(ctx, client, logger)
 		logger.Info("centreon client authenticated", "host", cfg.Host)
 	}
 
 	s := buildServer(client, logger)
 	logger.Info("centreon-mcp-go ready", "transport", "stdio")
 	return s.Run(ctx, &mcp.StdioTransport{})
+}
+
+// logoutClientBounded logs client out during shutdown on a fresh, cancel-immune,
+// time-bounded context. It is the stdio counterpart to gracefulShutdown's
+// shared-client logout: the ctx passed to runStdio is cancelled on shutdown, so the
+// logout runs on context.WithoutCancel to survive that cancellation, but it must
+// still be bounded by shutdownLogoutTimeout so an unreachable or hung Centreon
+// cannot block process exit (issue #38).
+//
+// It debug-logs and swallows its own logout error so best-effort cleanup never
+// fails the process, and logs success at info to match gracefulShutdown's
+// shared-client path and pair with runStdio's login-success line. It reuses the
+// logger-bearing client from runStdio (like gracefulShutdown's shared client,
+// unlike logoutCachedToken's nil-logger client), so a failing shutdown logout can
+// still surface a line from the centreon client's own request logging.
+func logoutClientBounded(ctx context.Context, client *centreon.Client, logger *slog.Logger) {
+	logoutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownLogoutTimeout)
+	defer cancel()
+	if err := client.Logout(logoutCtx); err != nil {
+		logger.Debug("centreon client logout failed", "error", err)
+	} else {
+		logger.Info("centreon client logged out")
+	}
 }
 
 // runHTTP starts the MCP server over HTTP.
