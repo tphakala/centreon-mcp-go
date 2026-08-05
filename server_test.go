@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -737,5 +738,51 @@ func TestRun_EnvLoginRefusesCrossHostRedirect(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "centreon login") || !strings.Contains(err.Error(), "cross-host redirect") {
 		t.Errorf("want a login error caused by the cross-host redirect guard, got: %v", err)
+	}
+}
+
+// TestWarnIfAllowlistIneffective pins issue #31: a configured
+// CENTREON_ALLOWED_HOSTS is only consulted in gateway mode (http transport with
+// gateway auth). In every other mode a set value is silently a no-op, so startup
+// must emit exactly one Warn line to signal the least-surprise gap; in the
+// enforcing mode, and whenever no allowlist is set, it must stay silent.
+func TestWarnIfAllowlistIneffective(t *testing.T) {
+	t.Parallel()
+
+	const marker = "CENTREON_ALLOWED_HOSTS is set but"
+	allowlist := []string{"https://a.example.com"}
+
+	tests := []struct {
+		name      string
+		hosts     []string
+		transport string
+		authMode  string
+		wantWarn  bool
+	}{
+		{"set, stdio+env: inert, warns", allowlist, transportStdio, authModeEnv, true},
+		{"set, http+env: inert, warns", allowlist, transportHTTP, authModeEnv, true},
+		{"set, stdio+gateway: inert, warns", allowlist, transportStdio, authModeGateway, true},
+		{"set, http+gateway: enforced, silent", allowlist, transportHTTP, authModeGateway, false},
+		{"unset, http+gateway: silent", nil, transportHTTP, authModeGateway, false},
+		{"unset, stdio+env: silent", nil, transportStdio, authModeEnv, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			cfg := &Config{AllowedHosts: tt.hosts, Transport: tt.transport, AuthMode: tt.authMode}
+
+			warnIfAllowlistIneffective(cfg, logger)
+
+			wantCount := 0
+			if tt.wantWarn {
+				wantCount = 1
+			}
+			if gotCount := strings.Count(buf.String(), marker); gotCount != wantCount {
+				t.Errorf("warn lines = %d, want %d; log=%q", gotCount, wantCount, buf.String())
+			}
+		})
 	}
 }

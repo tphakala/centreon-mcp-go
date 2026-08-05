@@ -139,9 +139,26 @@ func newCentreonClient(host string, cfg *Config, logger *slog.Logger, httpClient
 	return centreon.NewClient(host, opts...)
 }
 
+// warnIfAllowlistIneffective emits a startup warning when CENTREON_ALLOWED_HOSTS
+// is configured but the effective mode will never consult it. The allowlist is
+// only enforced in gateway mode (http transport with gateway auth); in every
+// other mode a set value is silently a no-op, so without this signal an operator
+// can believe they have restricted the reachable hosts when they have not. This
+// is a least-surprise warning, not a security control: outside gateway mode
+// there is no per-request X-Centreon-Host to restrict. It mirrors the gateway
+// allowlist status lines emitted in runHTTP.
+func warnIfAllowlistIneffective(cfg *Config, logger *slog.Logger) {
+	if len(cfg.AllowedHosts) == 0 || gatewayMode(cfg) {
+		return
+	}
+	logger.Warn("CENTREON_ALLOWED_HOSTS is set but is only enforced in gateway mode (AUTH_MODE=gateway with MCP_TRANSPORT=http); it has no effect with the current transport/auth mode",
+		"transport", cfg.Transport, "authMode", cfg.AuthMode)
+}
+
 // run starts the server with the configured transport.
 func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	logger.Info("centreon-mcp-go starting", "version", version, "transport", cfg.Transport)
+	warnIfAllowlistIneffective(cfg, logger)
 
 	// One HTTP client, shared across all requests. It always installs the
 	// cross-host redirect guard (X-AUTH-TOKEN must not leak, CWE-522) and, when
