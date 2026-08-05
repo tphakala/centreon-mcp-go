@@ -199,7 +199,7 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient 
 			return fmt.Errorf("centreon login: %w", err)
 		}
 		defer logoutClientBounded(ctx, client, logger)
-		logger.Info("centreon client authenticated", "host", cfg.Host)
+		logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
 	}
 
 	s := buildServer(client, logger)
@@ -244,7 +244,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 			if err := client.Login(ctx); err != nil {
 				return fmt.Errorf("centreon login: %w", err)
 			}
-			logger.Info("centreon client authenticated", "host", cfg.Host)
+			logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
 		}
 		sharedClient = client
 	} else {
@@ -362,7 +362,7 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 	}
 
 	if !hostAllowed(host, cfg.AllowedHosts) {
-		logger.Error("gateway: host not in allowlist", "host", host)
+		logger.Error("gateway: host not in allowlist", "host", safeHost(host))
 		return nil
 	}
 
@@ -378,36 +378,36 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		gwCfg.Token = token
 	case username != "" && password != "":
 		if cached, ok := tokenCache.Get(host, username, password); ok {
-			logger.Debug("gateway: using cached token", "host", host)
+			logger.Debug("gateway: using cached token", "host", safeHost(host))
 			gwCfg.Token = cached
 		} else {
 			gwCfg.Username = username
 			gwCfg.Password = password
 		}
 	default:
-		logger.Error("gateway: missing credentials", "host", host)
+		logger.Error("gateway: missing credentials", "host", safeHost(host))
 		return nil
 	}
 
 	client, err := newCentreonClient(host, gwCfg, logger, httpClient)
 	if err != nil {
-		logger.Error("gateway: failed to create client", "host", host, "error", err)
+		logger.Error("gateway: failed to create client", "host", safeHost(host), "error", err)
 		return nil
 	}
 
 	if gwCfg.Token == "" {
 		if err := client.Login(r.Context()); err != nil {
-			logger.Error("gateway: authentication failed", "host", host, "error", err)
+			logger.Error("gateway: authentication failed", "host", safeHost(host), "error", err)
 			return nil
 		}
 		// Cache the token for subsequent requests
 		if tok := client.Token(); tok != "" {
 			tokenCache.Set(host, username, password, tok)
-			logger.Debug("gateway: cached token after login", "host", host)
+			logger.Debug("gateway: cached token after login", "host", safeHost(host))
 		}
 	}
 
-	logger.Debug("gateway: created per-request client", "host", host)
+	logger.Debug("gateway: created per-request client", "host", safeHost(host))
 	return buildServer(client, logger)
 }
 
@@ -466,12 +466,12 @@ func logoutCachedToken(ctx context.Context, host, token string, logger *slog.Log
 	gwCfg := &Config{Token: token}
 	client, err := newCentreonClient(host, gwCfg, nil, httpClient)
 	if err != nil {
-		logger.Debug("gateway: failed to build client for token logout", "host", host, "error", err)
+		logger.Debug("gateway: failed to build client for token logout", "host", safeHost(host), "error", err)
 		return
 	}
 	if err := client.Logout(ctx); err != nil {
-		logger.Debug("gateway: token logout failed", "host", host, "error", err)
+		logger.Debug("gateway: token logout failed", "host", safeHost(host), "error", err)
 		return
 	}
-	logger.Debug("gateway: logged out cached token", "host", host)
+	logger.Debug("gateway: logged out cached token", "host", safeHost(host))
 }
