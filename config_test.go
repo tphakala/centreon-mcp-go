@@ -281,8 +281,9 @@ func TestValidateHostScheme(t *testing.T) {
 }
 
 // TestSafeHost pins that safeHost masks a userinfo password (so it cannot reach
-// logs or error messages, CWE-532) while leaving plain and unparseable hosts
-// unchanged.
+// logs or error messages, CWE-532) across every form that can carry one, including
+// the scheme-less user:pass@host form url.Redacted alone does not mask (issue #41),
+// while leaving a credential-free host byte for byte unchanged.
 func TestSafeHost(t *testing.T) {
 	tests := []struct {
 		name string
@@ -291,7 +292,36 @@ func TestSafeHost(t *testing.T) {
 	}{
 		{"masks password in http userinfo", "http://admin:sekret@centreon.example.com", "http://admin:xxxxx@centreon.example.com"},
 		{"masks password in https userinfo", "https://admin:sekret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		// Scheme-less/opaque forms: url.Parse leaves no userinfo for url.Redacted, so
+		// these leaked before #41. safeHost reparses (or masks textually) instead.
+		{"masks scheme-less userinfo", "admin:sekret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		{"masks scheme-less userinfo with path", "admin:sekret@centreon.example.com/mon", "admin:xxxxx@centreon.example.com/mon"},
+		{"masks leading //authority userinfo", "//admin:sekret@centreon.example.com", "//admin:xxxxx@centreon.example.com"},
+		{"masks empty-scheme ://authority userinfo", "://admin:sekret@centreon.example.com", "://admin:xxxxx@centreon.example.com"},
+		{"masks userinfo with port and path", "https://admin:sekret@centreon.example.com:8443/mon?q=1", "https://admin:xxxxx@centreon.example.com:8443/mon?q=1"},
+		{"masks userinfo when the path also has @", "https://admin:sekret@centreon.example.com/p@th", "https://admin:xxxxx@centreon.example.com/p@th"},
+		// url.Parse fails outright on the bad percent-escape, so the textual fallback
+		// must still redact rather than return the raw credential.
+		{"masks userinfo in an unparseable URL", "https://admin:sekret@centreon.example.com/%zz", "https://admin:xxxxx@centreon.example.com/%zz"},
+		// A password containing an unescaped '/', '?' or '#' breaks url.Parse and must
+		// not fail open (base64 passwords routinely contain '/').
+		{"masks password with a slash", "https://admin:aB9/xY2z@centreon.example.com/api", "https://admin:xxxxx@centreon.example.com/api"},
+		{"masks scheme-less password with a slash", "admin:aB9/xY2z@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		{"masks password with a question mark", "https://admin:pa?ss@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		{"masks password with a hash", "https://admin:pa#ss@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		{"masks password beginning with a slash", "https://admin:/sekret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		{"masks scheme-less password beginning with a slash", "admin:/sekret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		{"masks scheme-less password beginning with a question mark", "admin:?sekret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		// Credential-free hosts whose path or query legitimately contains ':' or '@'
+		// must never be corrupted.
+		{"leaves host:port with @ in path unchanged", "https://centreon.example.com:8080/a@b", "https://centreon.example.com:8080/a@b"},
+		{"leaves : and @ in query unchanged", "https://centreon.example.com:8443/x?a=b:c@d", "https://centreon.example.com:8443/x?a=b:c@d"},
+		{"leaves IPv6 host with @ in path unchanged", "https://[2001:db8::1]/x@y", "https://[2001:db8::1]/x@y"},
+		{"leaves scheme-less host with @ in path unchanged", "centreon.example.com/a@b", "centreon.example.com/a@b"},
 		{"leaves plain host unchanged", "https://centreon.example.com", "https://centreon.example.com"},
+		{"leaves @ in query unchanged", "https://centreon.example.com/path?x=a@b.com", "https://centreon.example.com/path?x=a@b.com"},
+		{"leaves userinfo without a password unchanged", "https://user@centreon.example.com", "https://user@centreon.example.com"},
+		{"leaves empty string unchanged", "", ""},
 		{"passes through unparseable host", "127.0.0.1:8080", "127.0.0.1:8080"},
 	}
 

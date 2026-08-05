@@ -224,17 +224,61 @@ func validateHostScheme(host string, allowHTTP bool) error {
 	}
 }
 
-// safeHost masks the password in a standard scheme://user:pass@host URL so it can
-// be put into an error message or log field without leaking an embedded credential
-// (CWE-532). It uses url.Redacted, so it covers the realistic case where a
-// credential is written into the host URL; a scheme-less or unparseable host is
-// returned unchanged, which validateHostScheme rejects anyway. This handles the
-// surfaces this file adds; the pre-existing gateway host log lines are tracked in
-// a separate issue.
+// safeHost masks the password in a host URL so it can be put into a log field or
+// error message without leaking an embedded credential (CWE-532). It redacts the
+// standard scheme://user:pass@host form via url.Redacted and the scheme-less
+// user:pass@host form (which url.Parse treats as scheme:opaque, exposing no userinfo
+// to mask) by reparsing it as an authority. A password carrying an unescaped '/',
+// '?' or '#' breaks url.Parse; that form falls back to masking the password span
+// textually, so redaction fails closed. A credential-free host is returned
+// unchanged, so log greps on the hostname still match. Every host-URL log field and
+// validateHostScheme error message routes through it.
+//
+// Limitation: a password containing an unencoded "//" or "://" is indistinguishable
+// from URL scheme/authority structure (url.Parse reads it as a scheme and username),
+// so it may not be fully masked. RFC 3986 requires percent-encoding such characters
+// in userinfo; the realistic single-'/' base64 case is handled.
 func safeHost(host string) string {
-	u, err := url.Parse(host)
-	if err != nil {
-		return host
+	if u, err := url.Parse(host); err == nil {
+		if u.User != nil {
+			return u.Redacted()
+		}
+		// A well-formed hierarchical URL with a real host and no userinfo carries no
+		// credential: any ':' or '@' is in the host:port, path or query. A userinfo
+		// password that begins with '/' defeats that, because url.Parse mis-splits it
+		// into the path, leaving the host empty (scheme-less input) or ending in a
+		// bare ':' (scheme-present input); both fall through to be masked.
+		if u.Opaque == "" && u.Host != "" && !strings.HasSuffix(u.Host, ":") {
+			return host
+		}
 	}
-	return u.Redacted()
+	if u, err := url.Parse("//" + host); err == nil && u.User != nil {
+		return strings.TrimPrefix(u.Redacted(), "//")
+	}
+	return maskAuthorityPassword(host)
+}
+
+// maskAuthorityPassword fails closed for host strings url.Parse cannot decode into
+// userinfo (a password with an unescaped '/', '?' or '#', a leading "://", or an
+// invalid percent-escape). It masks the password span from the first ':' to the
+// last '@' (the userinfo/host delimiter). A ':' sitting behind a path separator is
+// left alone, and a host with no userinfo is returned unchanged, so a legitimate
+// ':' or '@' in a path or query is never touched.
+func maskAuthorityPassword(host string) string {
+	rest, prefix := host, ""
+	// A leading "scheme://" or "//" precedes the authority; only treat "//" as the
+	// authority marker when nothing path-like or an '@' comes before it.
+	if i := strings.Index(rest, "//"); i >= 0 && !strings.ContainsAny(rest[:i], "/?#@") {
+		prefix, rest = rest[:i+2], rest[i+2:]
+	}
+	at := strings.LastIndexByte(rest, '@')
+	if at < 0 {
+		return host // no userinfo
+	}
+	userinfo := rest[:at]
+	colon := strings.IndexByte(userinfo, ':')
+	if colon < 0 || strings.ContainsAny(userinfo[:colon], "/?#") {
+		return host // no password, or the ':' is in a path/query rather than userinfo
+	}
+	return prefix + userinfo[:colon] + ":xxxxx" + rest[at:]
 }

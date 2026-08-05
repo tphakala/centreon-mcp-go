@@ -96,6 +96,66 @@ func TestGatewayServer_HostAllowlist(t *testing.T) {
 	})
 }
 
+// TestGatewayServer_RedactsUserinfoInHostLogs pins issue #41: a gateway host URL
+// can embed userinfo (https://user:pass@host), so every gateway host log field
+// must go through safeHost (url.Redacted) or an embedded credential leaks into the
+// logs (CWE-532). It drives representative reachable rejection paths; all gateway
+// host log fields share the same safeHost(host) wrapper.
+func TestGatewayServer_RedactsUserinfoInHostLogs(t *testing.T) {
+	t.Parallel()
+
+	const secret = "s3cr3tpw"
+
+	newReq := func(host string, withToken bool) *http.Request {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
+		r.Header.Set("X-Centreon-Host", host)
+		if withToken {
+			r.Header.Set("X-Centreon-Token", "tok")
+		}
+		return r
+	}
+
+	allowlist := &Config{AllowedHosts: []string{"https://allowed.example.com"}}
+
+	tests := []struct {
+		name string
+		cfg  *Config
+		req  *http.Request
+	}{
+		// The host-not-in-allowlist path logs before validateHostScheme, so it sees
+		// the raw header for both the standard and the scheme-less credential form
+		// (the scheme-less form is the one url.Redacted alone would miss, issue #41).
+		{"scheme-ful host not in allowlist", allowlist, newReq("https://gwuser:"+secret+"@evil.example.com", true)},
+		{"scheme-less host not in allowlist", allowlist, newReq("gwuser:"+secret+"@evil.example.com", true)},
+		// empty allowlist + no credential headers -> missing-credentials path.
+		{"missing credentials", &Config{}, newReq("https://gwuser:"+secret+"@evil.example.com", false)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			cache := NewTokenCache(time.Minute)
+
+			if srv := gatewayServer(tt.req, tt.cfg, cache, logger, nil); srv != nil {
+				t.Fatal("expected nil server for a rejected gateway request")
+			}
+
+			out := buf.String()
+			if out == "" {
+				t.Fatal("expected a gateway log line, got none")
+			}
+			if strings.Contains(out, secret) {
+				t.Errorf("log leaked embedded password (CWE-532): %s", out)
+			}
+			if !strings.Contains(out, "gwuser:xxxxx@") {
+				t.Errorf("expected redacted host (url.Redacted) in log, got: %s", out)
+			}
+		})
+	}
+}
+
 // TestLogoutCachedToken_SendsTokenToLogoutEndpoint pins that logoutCachedToken
 // invalidates a specific Centreon session: it must call GET /logout with the
 // cached token in the X-AUTH-TOKEN header (the client sends its stored token),
