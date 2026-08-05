@@ -123,6 +123,14 @@ func newHTTPClient(allowSelfSigned bool) (*http.Client, error) {
 // production httpClient is always the newHTTPClient product, so the cross-host
 // redirect guard and shared timeout apply to every request; it may be nil in
 // tests, in which case the dependency's default client (no redirect guard) is used.
+//
+// It reads only the auth credentials from cfg (Token, or Username/Password); the
+// host comes from the host parameter. It deliberately does not read
+// cfg.AllowSelfSigned: self-signed TLS is applied once on httpClient by
+// newHTTPClient. Building a fresh per-client transport from that flag here would
+// drop httpClient's cross-host redirect guard and reopen the X-AUTH-TOKEN leak
+// (CWE-522, #36); if it must vary per client, clone httpClient and keep its
+// CheckRedirect.
 func newCentreonClient(host string, cfg *Config, logger *slog.Logger, httpClient *http.Client) (*centreon.Client, error) {
 	opts := []centreon.Option{}
 	if cfg.Token != "" {
@@ -337,7 +345,7 @@ func gracefulShutdown(serveCtx context.Context, httpServer *http.Server, sharedC
 		}
 	}
 	if tokenCache != nil {
-		drainAndLogout(logoutCtx, tokenCache, cfg, logger, httpClient)
+		drainAndLogout(logoutCtx, tokenCache, logger, httpClient)
 	}
 }
 
@@ -363,10 +371,7 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		return nil
 	}
 
-	gwCfg := &Config{
-		Host:            host,
-		AllowSelfSigned: cfg.AllowSelfSigned,
-	}
+	gwCfg := &Config{}
 
 	switch {
 	case token != "":
@@ -425,7 +430,7 @@ func hostAllowed(host string, allowed []string) bool {
 // tokens and logging them out cannot break a live request. Logouts run
 // concurrently, bounded by gatewayLogoutConcurrency and by ctx; once ctx is done
 // the loop stops spawning further attempts that would only fail immediately.
-func drainAndLogout(ctx context.Context, tc *TokenCache, cfg *Config, logger *slog.Logger, httpClient *http.Client) {
+func drainAndLogout(ctx context.Context, tc *TokenCache, logger *slog.Logger, httpClient *http.Client) {
 	tokens := tc.Drain()
 	if len(tokens) == 0 {
 		return
@@ -438,7 +443,7 @@ func drainAndLogout(ctx context.Context, tc *TokenCache, cfg *Config, logger *sl
 			break
 		}
 		g.Go(func() error {
-			logoutCachedToken(ctx, ct.Host, ct.Token, cfg, logger, httpClient)
+			logoutCachedToken(ctx, ct.Host, ct.Token, logger, httpClient)
 			return nil
 		})
 	}
@@ -454,11 +459,11 @@ func drainAndLogout(ctx context.Context, tc *TokenCache, cfg *Config, logger *sl
 // client logs every failed request at Error, so on a cancelled or failing
 // shutdown logout it would emit dependency-layer Error noise that contradicts
 // this function's own debug-and-swallow handling.
-func logoutCachedToken(ctx context.Context, host, token string, cfg *Config, logger *slog.Logger, httpClient *http.Client) {
+func logoutCachedToken(ctx context.Context, host, token string, logger *slog.Logger, httpClient *http.Client) {
 	if token == "" {
 		return
 	}
-	gwCfg := &Config{Host: host, Token: token, AllowSelfSigned: cfg.AllowSelfSigned}
+	gwCfg := &Config{Token: token}
 	client, err := newCentreonClient(host, gwCfg, nil, httpClient)
 	if err != nil {
 		logger.Debug("gateway: failed to build client for token logout", "host", host, "error", err)
