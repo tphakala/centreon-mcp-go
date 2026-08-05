@@ -79,6 +79,20 @@ func TestGatewayServer_HostAllowlist(t *testing.T) {
 			t.Error("expected non-nil server when allowlist is empty, got nil")
 		}
 	})
+
+	t.Run("http host rejected when AllowHTTP is false", func(t *testing.T) {
+		cfg := &Config{}
+		if srv := gatewayServer(newReq("http://plain.example.com"), cfg, cache, logger, nil); srv != nil {
+			t.Error("expected nil server for cleartext http host without CENTREON_ALLOW_HTTP, got non-nil")
+		}
+	})
+
+	t.Run("http host accepted when AllowHTTP is true", func(t *testing.T) {
+		cfg := &Config{AllowHTTP: true}
+		if srv := gatewayServer(newReq("http://plain.example.com"), cfg, cache, logger, nil); srv == nil {
+			t.Error("expected non-nil server for http host with CENTREON_ALLOW_HTTP, got nil")
+		}
+	})
 }
 
 // TestLogoutCachedToken_SendsTokenToLogoutEndpoint pins that logoutCachedToken
@@ -212,6 +226,7 @@ func TestRunHTTP_GatewayLogsOutCachedSessionsOnShutdown(t *testing.T) {
 		AuthMode:  authModeGateway,
 		HTTPHost:  "127.0.0.1",
 		HTTPPort:  port,
+		AllowHTTP: true, // fake Centreon (httptest) is http loopback
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -393,7 +408,7 @@ func TestGatewayServer_TokenCachePinsPassword(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	cfg := &Config{} // no allowlist restriction
+	cfg := &Config{AllowHTTP: true} // no allowlist restriction; httptest server is http loopback
 	cache := NewTokenCache(time.Minute)
 
 	req := func(pass string) *http.Request {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -10,6 +11,14 @@ import (
 // defaultHTTPPort is the listen port used when MCP_HTTP_PORT is unset.
 const defaultHTTPPort = 8080
 
+// URL schemes accepted for a Centreon host. These name a URL scheme and are
+// deliberately separate from the transport* constants (which name the MCP
+// transport mode), even though "http" is the same string in both.
+const (
+	schemeHTTPS = "https"
+	schemeHTTP  = "http"
+)
+
 // Config holds the server configuration.
 type Config struct {
 	Host            string
@@ -17,6 +26,7 @@ type Config struct {
 	Password        string
 	Token           string
 	AllowSelfSigned bool
+	AllowHTTP       bool
 	Transport       string
 	HTTPPort        int
 	HTTPHost        string
@@ -51,12 +61,12 @@ func LoadConfig() (Config, error) {
 		}
 	}
 
-	cfg.Transport = envOr("MCP_TRANSPORT", "stdio")
+	cfg.Transport = envOr("MCP_TRANSPORT", transportStdio)
 	cfg.LogLevel = envOr("LOG_LEVEL", "info")
-	cfg.AuthMode = envOr("AUTH_MODE", "env")
+	cfg.AuthMode = envOr("AUTH_MODE", authModeEnv)
 
 	switch cfg.Transport {
-	case "stdio", transportHTTP:
+	case transportStdio, transportHTTP:
 	default:
 		return Config{}, fmt.Errorf("invalid MCP_TRANSPORT value %q: expected stdio/http", cfg.Transport)
 	}
@@ -77,16 +87,26 @@ func LoadConfig() (Config, error) {
 	}
 	cfg.HTTPPort = port
 
-	selfSigned := os.Getenv("CENTREON_ALLOW_SELF_SIGNED")
-	if selfSigned != "" {
-		v, err := strconv.ParseBool(selfSigned)
-		if err != nil {
-			return Config{}, fmt.Errorf("invalid CENTREON_ALLOW_SELF_SIGNED value %q: expected true/false", selfSigned)
-		}
-		cfg.AllowSelfSigned = v
+	cfg.AllowSelfSigned, err = parseBoolEnv("CENTREON_ALLOW_SELF_SIGNED")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.AllowHTTP, err = parseBoolEnv("CENTREON_ALLOW_HTTP")
+	if err != nil {
+		return Config{}, err
 	}
 
-	allowedHosts, err := loadAllowedHosts()
+	// Reject a cleartext http:// CENTREON_HOST (CWE-319) unless the operator opts
+	// in. In HTTP gateway mode CENTREON_HOST is an unused placeholder and the real
+	// hosts arrive per request via X-Centreon-Host, so its scheme is not validated
+	// here (gatewayServer validates each header value instead).
+	if !gatewayOnlyHost(&cfg) {
+		if err := validateHostScheme(cfg.Host, cfg.AllowHTTP); err != nil {
+			return Config{}, fmt.Errorf("CENTREON_HOST: %w", err)
+		}
+	}
+
+	allowedHosts, err := loadAllowedHosts(cfg.AllowHTTP)
 	if err != nil {
 		return Config{}, err
 	}
@@ -116,7 +136,7 @@ func loadHTTPPort() (int, error) {
 // os.Getenv, which cannot distinguish the two. A variable set to a non-empty
 // value that has no valid entries after trimming (e.g. " , , ") is a
 // misconfiguration and returns an error.
-func loadAllowedHosts() ([]string, error) {
+func loadAllowedHosts(allowHTTP bool) ([]string, error) {
 	raw := os.Getenv("CENTREON_ALLOWED_HOSTS")
 	if raw == "" {
 		return nil, nil
@@ -124,6 +144,11 @@ func loadAllowedHosts() ([]string, error) {
 	hosts := parseAllowedHosts(raw)
 	if len(hosts) == 0 {
 		return nil, fmt.Errorf("CENTREON_ALLOWED_HOSTS is set but contains no valid host entries")
+	}
+	for _, h := range hosts {
+		if err := validateHostScheme(h, allowHTTP); err != nil {
+			return nil, fmt.Errorf("CENTREON_ALLOWED_HOSTS: %w", err)
+		}
 	}
 	return hosts, nil
 }
@@ -146,4 +171,70 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseBoolEnv reads a boolean environment variable. An unset or empty value
+// yields false with no error; any other value is parsed with strconv.ParseBool.
+func parseBoolEnv(name string) (bool, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s value %q: expected true/false", name, raw)
+	}
+	return v, nil
+}
+
+// gatewayOnlyHost reports whether CENTREON_HOST is a required-but-unused
+// placeholder for this configuration. In HTTP gateway mode the effective
+// Centreon hosts come from the per-request X-Centreon-Host header, so
+// CENTREON_HOST is never used to reach Centreon. Every other mode (stdio, or
+// HTTP with env auth) uses CENTREON_HOST directly, so the check requires both
+// the http transport and gateway auth mode.
+func gatewayOnlyHost(cfg *Config) bool {
+	return cfg.Transport == transportHTTP && cfg.AuthMode == authModeGateway
+}
+
+// validateHostScheme rejects a Centreon host URL whose scheme would send
+// credentials in cleartext. Credentials (username/password, or the X-AUTH-TOKEN
+// header once authenticated) ride every request to the host, so an http:// target
+// exposes them on the wire (CWE-319). https is always accepted; http only when the
+// operator opts in via CENTREON_ALLOW_HTTP. A missing or non-http(s) scheme, or an
+// unparseable URL, is rejected outright (fail closed). url.Parse normalises the
+// scheme to lowercase, so the cases below are matched in lowercase.
+func validateHostScheme(host string, allowHTTP bool) error {
+	u, err := url.Parse(host)
+	if err != nil {
+		return fmt.Errorf("invalid host url %q: %w", safeHost(host), err)
+	}
+	switch u.Scheme {
+	case schemeHTTPS:
+		return nil
+	case schemeHTTP:
+		if allowHTTP {
+			return nil
+		}
+		return fmt.Errorf("host %q uses http, which sends credentials in cleartext (CWE-319): use https or set CENTREON_ALLOW_HTTP=true", safeHost(host))
+	case "":
+		return fmt.Errorf("host %q must include a scheme (https://...)", safeHost(host))
+	default:
+		return fmt.Errorf("host %q has unsupported scheme %q: use https (or http with CENTREON_ALLOW_HTTP=true)", safeHost(host), u.Scheme)
+	}
+}
+
+// safeHost masks the password in a standard scheme://user:pass@host URL so it can
+// be put into an error message or log field without leaking an embedded credential
+// (CWE-532). It uses url.Redacted, so it covers the realistic case where a
+// credential is written into the host URL; a scheme-less or unparseable host is
+// returned unchanged, which validateHostScheme rejects anyway. This handles the
+// surfaces this file adds; the pre-existing gateway host log lines are tracked in
+// a separate issue.
+func safeHost(host string) string {
+	u, err := url.Parse(host)
+	if err != nil {
+		return host
+	}
+	return u.Redacted()
 }
