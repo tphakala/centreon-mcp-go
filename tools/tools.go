@@ -61,15 +61,15 @@ type ListInput struct {
 	Search string `json:"search,omitempty" jsonschema:"Filter by name (like match)"`
 }
 
-// MonitoringListInput is the input for monitoring list tools.
-// Monitoring endpoints do not support name search filtering.
+// MonitoringListInput is the input for the host and service monitoring list tools,
+// which support pagination only.
 type MonitoringListInput struct {
 	Page  int `json:"page,omitempty"  jsonschema:"Page number (default 1)"`
 	Limit int `json:"limit,omitempty" jsonschema:"Results per page (default 30, max 100)"`
 }
 
-// MonitoringHostIDListInput is the input for host-scoped monitoring list tools.
-// Monitoring endpoints do not support name search filtering.
+// MonitoringHostIDListInput is the input for host-scoped monitoring list tools
+// (host services and host timeline), which support pagination only.
 type MonitoringHostIDListInput struct {
 	HostID int `json:"hostID"           jsonschema:"Host ID"`
 	Page   int `json:"page,omitempty"   jsonschema:"Page number (default 1)"`
@@ -158,56 +158,52 @@ func errorResult(format string, args ...any) (res *mcp.CallToolResult, anyVal an
 	}, nil
 }
 
-// buildListOptions converts a ListInput into centreon.ListOption slice.
-// Search terms are automatically wrapped with SQL wildcards (%) for
-// consistent LIKE matching across all configuration endpoints.
-func buildListOptions(in ListInput) []centreon.ListOption {
-	var opts []centreon.ListOption
+// wrapLikePattern wraps s with SQL % wildcards for LIKE matching, unless a
+// wildcard is already present at that boundary. An empty string is unchanged.
+func wrapLikePattern(s string) string {
+	if s == "" {
+		return s
+	}
+	if s[0] != '%' {
+		s = "%" + s
+	}
+	if s[len(s)-1] != '%' {
+		s += "%"
+	}
+	return s
+}
 
-	limit := in.Limit
+// pagingOptions returns the clamped limit and optional page options shared by the
+// list builders. Limit defaults to defaultPageSize and is capped at maxPageSize.
+func pagingOptions(page, limit int) []centreon.ListOption {
 	if limit <= 0 {
 		limit = defaultPageSize
 	}
 	if limit > maxPageSize {
 		limit = maxPageSize
 	}
-	opts = append(opts, centreon.WithLimit(limit))
-
-	if in.Page > 0 {
-		opts = append(opts, centreon.WithPage(in.Page))
-	}
-	if in.Search != "" {
-		search := in.Search
-		if search != "" && search[0] != '%' {
-			search = "%" + search
-		}
-		if search != "" && search[len(search)-1] != '%' {
-			search += "%"
-		}
-		opts = append(opts, centreon.WithSearch(centreon.Lk("name", search)))
+	opts := []centreon.ListOption{centreon.WithLimit(limit)}
+	if page > 0 {
+		opts = append(opts, centreon.WithPage(page))
 	}
 	return opts
 }
 
-// buildMonitoringListOptions converts a MonitoringListInput into centreon.ListOption slice
-// for monitoring endpoints. Monitoring endpoints do not support the JSON search
-// filter format, so the search parameter is not accepted.
-func buildMonitoringListOptions(in MonitoringListInput) []centreon.ListOption {
-	var opts []centreon.ListOption
-
-	limit := in.Limit
-	if limit <= 0 {
-		limit = defaultPageSize
-	}
-	if limit > maxPageSize {
-		limit = maxPageSize
-	}
-	opts = append(opts, centreon.WithLimit(limit))
-
-	if in.Page > 0 {
-		opts = append(opts, centreon.WithPage(in.Page))
+// buildListOptions converts a ListInput into a centreon.ListOption slice. Search
+// terms are wrapped with SQL wildcards (%) for consistent LIKE matching across
+// configuration endpoints.
+func buildListOptions(in ListInput) []centreon.ListOption {
+	opts := pagingOptions(in.Page, in.Limit)
+	if in.Search != "" {
+		opts = append(opts, centreon.WithSearch(centreon.Lk(searchFieldName, wrapLikePattern(in.Search))))
 	}
 	return opts
+}
+
+// buildMonitoringListOptions converts a MonitoringListInput into a centreon.ListOption
+// slice for monitoring endpoints that support pagination only.
+func buildMonitoringListOptions(in MonitoringListInput) []centreon.ListOption {
+	return pagingOptions(in.Page, in.Limit)
 }
 
 // ListRequester abstracts any client List method.
