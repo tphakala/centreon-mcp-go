@@ -9,7 +9,7 @@ Exposes 88 tools covering real-time monitoring, host and service configuration, 
 - **88 tools** across 11 categories: monitoring, operations, downtimes, acknowledgements, host config, service config, infrastructure, users, notifications, platform status, and connection testing
 - **Three transport modes**: stdio (default), HTTP (streamable), and HTTP gateway mode
 - **Structured JSON logging** via `log/slog` with configurable levels
-- **Gateway mode with token cache**: per-request Centreon credentials via HTTP headers, with a 50-minute token cache to avoid repeated logins
+- **Gateway mode with token cache**: per-request Centreon credentials via HTTP headers, with an LRU token cache (50-minute TTL, bounded size) to avoid repeated logins
 - **Self-signed certificate support**: opt-in via `CENTREON_ALLOW_SELF_SIGNED`
 - **Cross-host redirect protection**: the Centreon session token (`X-AUTH-TOKEN`) is never forwarded across an HTTP redirect to a different host, preventing credential leakage (CWE-522)
 
@@ -150,6 +150,8 @@ curl http://localhost:8080/health
 # {"authMode":"env","status":"ok","transport":"http","version":"dev"}
 ```
 
+The `version` field reads `dev` for a build from source (`go build` or `go install`); official release binaries report their version tag, injected at build time.
+
 Configure your MCP client to connect to `http://localhost:8080/mcp`.
 
 ## Gateway Mode
@@ -165,7 +167,7 @@ Enable it with `AUTH_MODE=gateway` alongside `MCP_TRANSPORT=http`. The effective
 | `X-Centreon-Password`   | Password (use with `X-Centreon-Username`)           |
 | `X-Centreon-Token`      | API token (alternative to username + password)      |
 
-Acquired session tokens are cached for 50 minutes per (host, username) pair to avoid repeated logins.
+Acquired session tokens are cached for 50 minutes, keyed on the (host, username, password) triple so a request presenting a different password misses the cache and re-authenticates rather than reusing a token minted for another password. The cache is an LRU bounded to 4096 entries, so a caller supplying many distinct credentials cannot grow it without limit.
 
 On graceful shutdown (SIGINT/SIGTERM) the server logs out the Centreon sessions it created so they do not linger on the server until their idle timeout, and it waits for those logout calls to finish before exiting. Shutdown therefore takes a little longer than before, up to roughly 25 seconds if a Centreon host is slow or unreachable, so allow for this in your orchestrator's stop grace period (for example Kubernetes `terminationGracePeriodSeconds`).
 
