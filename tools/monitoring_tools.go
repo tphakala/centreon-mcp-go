@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
@@ -54,7 +56,7 @@ func RegisterMonitoringTools(s *mcp.Server, client *centreon.Client, logger *slo
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_monitoring_resource_list",
-		Description: "List hosts and services together in Centreon's unified resource view, each with its real-time monitoring status. Use this when you want hosts and services in one combined stream; for only hosts use centreon_monitoring_host_list and for only services use centreon_monitoring_service_list. Paginates with page (default 1) and limit (default 30, max 100) and reflects current engine state, not stored configuration. Read-only.",
+		Description: "List hosts and services together in Centreon's unified resource view, each with its real-time monitoring status. Use this when you want hosts and services in one combined stream; for only hosts use centreon_monitoring_host_list and for only services use centreon_monitoring_service_list. Optional filters: search (resource name, like match), hostName (a host and its services, like match), monitoringServer (exact poller name), plus sortBy (name, status, last_status_change) with sortOrder (ASC or DESC). Paginates with page (default 1) and limit (default 30, max 100) and reflects current engine state, not stored configuration. Read-only.",
 		Annotations: readOnlyTool("List monitoring resources"),
 	}, monitoringResourceListHandler(client, logger))
 
@@ -184,11 +186,108 @@ func monitoringServiceStatusCountsHandler(client *centreon.Client, logger *slog.
 	}
 }
 
-func monitoringResourceListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in MonitoringListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in MonitoringListInput) (*mcp.CallToolResult, any, error) {
+// searchFieldName is the Centreon "name" search field, shared by the config-endpoint
+// search (buildListOptions) and the monitoring/resources search; sortDirAsc and
+// sortDirDesc are the accepted sort directions.
+const (
+	searchFieldName = "name"
+	sortDirAsc      = "ASC"
+	sortDirDesc     = "DESC"
+)
+
+// resourceSortFields maps user-facing sort keys to the Centreon monitoring/resources
+// sort fields. "status" sorts by severity. Field names verified against centreon-web
+// DbReadResourceRepository.php; NOT measured against a live instance.
+var resourceSortFields = map[string]string{
+	searchFieldName:      searchFieldName,
+	"status":             "status_severity_code",
+	"last_status_change": "last_status_change",
+}
+
+// MonitoringResourceListInput is the input for centreon_monitoring_resource_list.
+// The unified resources endpoint honors search and sort_by, so this tool exposes
+// name, host and poller filters plus sorting, unlike the other monitoring list tools.
+type MonitoringResourceListInput struct {
+	Page             int    `json:"page,omitempty"             jsonschema:"Page number (default 1)"`
+	Limit            int    `json:"limit,omitempty"            jsonschema:"Results per page (default 30, max 100)"`
+	Search           string `json:"search,omitempty"           jsonschema:"Filter by resource name (like match on host and service names)"`
+	HostName         string `json:"hostName,omitempty"         jsonschema:"Filter by host name (like match); matches the host and every service on it"`
+	MonitoringServer string `json:"monitoringServer,omitempty" jsonschema:"Filter by monitoring server (poller) name (exact match)"`
+	SortBy           string `json:"sortBy,omitempty"           jsonschema:"Sort field: name, status, or last_status_change (status sorts by severity)"`
+	SortOrder        string `json:"sortOrder,omitempty"        jsonschema:"Sort direction: ASC (default) or DESC; requires sortBy"`
+}
+
+// buildMonitoringResourceListOptions converts a MonitoringResourceListInput into
+// centreon.ListOption values for the unified monitoring/resources endpoint. It
+// returns an error for an invalid sort field or direction so the handler can
+// reject the request before calling the API.
+func buildMonitoringResourceListOptions(in *MonitoringResourceListInput) ([]centreon.ListOption, error) {
+	opts := pagingOptions(in.Page, in.Limit)
+	if f := buildResourceSearchFilter(in); f != nil {
+		opts = append(opts, centreon.WithSearch(f))
+	}
+	return appendResourceSort(opts, in.SortBy, in.SortOrder)
+}
+
+// buildResourceSearchFilter combines the optional name, host and poller filters in
+// a fixed order for deterministic output. It returns nil when no filter is set.
+func buildResourceSearchFilter(in *MonitoringResourceListInput) centreon.Filter {
+	var filters []centreon.Filter
+	if s := strings.TrimSpace(in.Search); s != "" {
+		filters = append(filters, centreon.Lk(searchFieldName, wrapLikePattern(s)))
+	}
+	if s := strings.TrimSpace(in.HostName); s != "" {
+		filters = append(filters, centreon.Lk("h.name", wrapLikePattern(s)))
+	}
+	if s := strings.TrimSpace(in.MonitoringServer); s != "" {
+		filters = append(filters, centreon.Eq("monitoring_server_name", s))
+	}
+	switch len(filters) {
+	case 0:
+		return nil
+	case 1:
+		return filters[0]
+	default:
+		return centreon.And(filters...)
+	}
+}
+
+// appendResourceSort appends a WithSort option for the given sort field and
+// direction. It leaves opts unchanged when sortBy is empty, and errors on an
+// unknown field, an invalid direction, or a direction supplied without a field.
+func appendResourceSort(opts []centreon.ListOption, sortBy, sortOrder string) ([]centreon.ListOption, error) {
+	sortBy = strings.TrimSpace(sortBy)
+	sortOrder = strings.TrimSpace(sortOrder)
+	if sortBy == "" {
+		if sortOrder != "" {
+			return nil, fmt.Errorf("sortOrder %q requires sortBy", sortOrder)
+		}
+		return opts, nil
+	}
+	field, ok := resourceSortFields[strings.ToLower(sortBy)]
+	if !ok {
+		return nil, fmt.Errorf("unknown sortBy %q (want name, status, or last_status_change)", sortBy)
+	}
+	dir := sortDirAsc
+	if sortOrder != "" {
+		dir = strings.ToUpper(sortOrder)
+		if dir != sortDirAsc && dir != sortDirDesc {
+			return nil, fmt.Errorf("invalid sortOrder %q (want ASC or DESC)", sortOrder)
+		}
+	}
+	return append(opts, centreon.WithSort(map[string]string{field: dir})), nil
+}
+
+func monitoringResourceListHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in MonitoringResourceListInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in MonitoringResourceListInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_monitoring_resource_list")
-		logger.Debug("centreon_monitoring_resource_list", "page", in.Page, "limit", in.Limit)
-		opts := buildMonitoringListOptions(in)
+		logger.Debug("centreon_monitoring_resource_list", "page", in.Page, "limit", in.Limit, "search", in.Search, "hostName", in.HostName, "monitoringServer", in.MonitoringServer, "sortBy", in.SortBy, "sortOrder", in.SortOrder)
+		opts, err := buildMonitoringResourceListOptions(&in)
+		if err != nil {
+			logger.Error("failed: centreon_monitoring_resource_list", "error", err)
+			res, anyVal := errorResult("centreon_monitoring_resource_list: invalid input: %v", err)
+			return res, anyVal, nil
+		}
 		resp, err := client.Monitoring.List(ctx, opts...)
 		if err != nil {
 			logger.Error("failed: centreon_monitoring_resource_list", "error", err)
