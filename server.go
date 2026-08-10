@@ -51,15 +51,16 @@ const (
 	gatewayLogoutConcurrency = 16
 )
 
-// buildServer creates an MCP server with all tools registered. displayHost is
-// the Centreon host the status and connection tools report; the caller must
-// already have passed it through safeHost, as buildServer does not redact.
-func buildServer(client *centreon.Client, logger *slog.Logger, displayHost string) *mcp.Server {
+// buildServer creates an MCP server with all tools registered. displayHostName
+// is the Centreon host the status and connection tools report; the caller must
+// already have passed it through displayHost (which strips all userinfo), as
+// buildServer does not sanitize.
+func buildServer(client *centreon.Client, logger *slog.Logger, displayHostName string) *mcp.Server {
 	s := mcp.NewServer(
 		&mcp.Implementation{Name: "centreon-mcp-go", Version: version},
 		&mcp.ServerOptions{Instructions: serverInstructions},
 	)
-	tools.RegisterAll(s, client, logger, displayHost)
+	tools.RegisterAll(s, client, logger, displayHostName)
 	return s
 }
 
@@ -204,7 +205,7 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient 
 		logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
 	}
 
-	s := buildServer(client, logger, safeHost(cfg.Host))
+	s := buildServer(client, logger, displayHost(cfg.Host))
 	logger.Info("centreon-mcp-go ready", "transport", "stdio")
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
@@ -253,7 +254,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 			logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
 		}
 		sharedClient = client
-		envDisplayHost = safeHost(cfg.Host)
+		envDisplayHost = displayHost(cfg.Host)
 	} else {
 		tokenCache = NewTokenCache(tokenCacheTTL)
 		if len(cfg.AllowedHosts) == 0 {
@@ -414,9 +415,8 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		}
 	}
 
-	safeHostName := safeHost(host)
-	logger.Debug("gateway: created per-request client", "host", safeHostName)
-	return buildServer(client, logger, safeHostName)
+	logger.Debug("gateway: created per-request client", "host", safeHost(host))
+	return buildServer(client, logger, displayHost(host))
 }
 
 // hostAllowed reports whether host may be used in gateway mode. An empty

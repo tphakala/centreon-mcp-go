@@ -258,6 +258,21 @@ func safeHost(host string) string {
 	return maskAuthorityPassword(host)
 }
 
+// displayHost reduces a host URL to scheme://host[:port] for display in a tool
+// response, stripping ALL userinfo (username and password) plus any path, query
+// and fragment, so no credential embedded in the URL reaches a client. This is
+// stricter than safeHost, which keeps the username for log greps: issue #48
+// requires the response to expose no username, password or token. Every
+// display-path caller first runs the host through validateHostScheme, which
+// guarantees a parseable http/https URL, so the fail-closed placeholder is a
+// defensive fallback that never fires for a validated host.
+func displayHost(host string) string {
+	if u, err := url.Parse(host); err == nil && u.Host != "" {
+		return u.Scheme + "://" + u.Host
+	}
+	return "(redacted host)"
+}
+
 // maskAuthorityPassword fails closed for host strings url.Parse cannot decode into
 // userinfo (a password with an unescaped '/', '?' or '#', a leading "://", or an
 // invalid percent-escape). It masks the password span from the first ':' to the

@@ -17,8 +17,8 @@ const (
 
 // RegisterAll registers all Centreon tools with the MCP server. host is the
 // display-only Centreon host surfaced by the status and connection tools; it
-// must already be credential-redacted by the caller (safeHost in package main),
-// as the tools package prints it verbatim and never redacts.
+// must already be stripped of credentials by the caller (displayHost in package
+// main removes all userinfo), as the tools package prints it verbatim.
 func RegisterAll(s *mcp.Server, client *centreon.Client, logger *slog.Logger, host string) {
 	if logger == nil {
 		logger = slog.Default()

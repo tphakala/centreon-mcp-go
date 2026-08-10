@@ -581,11 +581,12 @@ func callToolText(t *testing.T, res *mcp.CallToolResult) string {
 // TestGatewayServer_ToolResponseReportsRedactedHost is an end-to-end guard for
 // #48: it drives gatewayServer with an X-Centreon-Host that embeds credentials,
 // then calls centreon_connection_test over an in-memory MCP session and asserts
-// the response names the per-request host with the password redacted, leaking
-// neither the password nor the token. This pins both the gateway threading and
-// the redaction at the gateway buildServer call site: passing the raw host
-// leaks the password, while passing cfg.Host (the gateway placeholder) drops the
-// loopback host:port. Either regression turns this red.
+// the response names the per-request host with ALL userinfo stripped, leaking
+// neither the username, the password, nor the token. This pins both the gateway
+// threading and the display-host sanitization at the gateway buildServer call
+// site: passing safeHost(host) leaks the username, passing the raw host leaks the
+// password, and passing cfg.Host (the gateway placeholder) drops the loopback
+// host:port. Each regression turns this red.
 func TestGatewayServer_ToolResponseReportsRedactedHost(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 
@@ -638,8 +639,11 @@ func TestGatewayServer_ToolResponseReportsRedactedHost(t *testing.T) {
 	}
 
 	text := callToolText(t, res)
-	if want := "gwuser:xxxxx@" + hostPort; !strings.Contains(text, want) {
-		t.Errorf("response should name the redacted per-request host %q, got: %q", want, text)
+	if want := "http://" + hostPort; !strings.Contains(text, want) {
+		t.Errorf("response should name the per-request host %q, got: %q", want, text)
+	}
+	if strings.Contains(text, "gwuser") {
+		t.Errorf("response leaked the username, got: %q", text)
 	}
 	if strings.Contains(text, secret) {
 		t.Errorf("response leaked the password, got: %q", text)

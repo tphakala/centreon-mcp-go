@@ -14,8 +14,8 @@ import (
 // PlatformStatus combines host status counts, service status counts, and monitoring servers.
 type PlatformStatus struct {
 	// Host is the configured Centreon host, with any embedded credentials
-	// redacted (the caller passes it through safeHost); it names the instance the
-	// counts below describe.
+	// stripped (the caller passes it through displayHost); it names the instance
+	// the counts below describe.
 	Host     string                                            `json:"host"`
 	Hosts    *centreon.HostStatusCount                         `json:"hosts"`
 	Services *centreon.ServiceStatusCount                      `json:"services"`
