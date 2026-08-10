@@ -203,11 +203,22 @@ func gatewayMode(cfg *Config) bool {
 // exposes them on the wire (CWE-319). https is always accepted; http only when the
 // operator opts in via CENTREON_ALLOW_HTTP. A missing or non-http(s) scheme, or an
 // unparseable URL, is rejected outright (fail closed). url.Parse normalises the
-// scheme to lowercase, so the cases below are matched in lowercase.
+// scheme to lowercase, so the cases below are matched in lowercase. A host that
+// still contains a raw '@' the parser did not consume as userinfo is also rejected:
+// it is a mis-encoded credential or a malformed base URL either way (issue #55).
 func validateHostScheme(host string, allowHTTP bool) error {
 	u, err := url.Parse(host)
 	if err != nil {
 		return fmt.Errorf("invalid host url %q: %w", safeHost(host), err)
+	}
+	// url.Parse can accept a mis-encoded credential without reporting userinfo: an
+	// all-numeric password prefix parses as a port and a short username as the host,
+	// leaving the '@' in the path, query or fragment (issue #55). A Centreon base URL
+	// never contains a raw '@', so reject the whole class rather than let the
+	// mis-parsed authority become a live client. Gated on http(s) so a scheme problem
+	// keeps its own more specific message.
+	if (u.Scheme == schemeHTTPS || u.Scheme == schemeHTTP) && u.User == nil && strings.ContainsRune(host, '@') {
+		return fmt.Errorf("host %q contains an unencoded '@' after the authority: percent-encode userinfo characters (RFC 3986) or remove the credential", safeHost(host))
 	}
 	switch u.Scheme {
 	case schemeHTTPS:
@@ -228,11 +239,15 @@ func validateHostScheme(host string, allowHTTP bool) error {
 // error message without leaking an embedded credential (CWE-532). It redacts the
 // standard scheme://user:pass@host form via url.Redacted and the scheme-less
 // user:pass@host form (which url.Parse treats as scheme:opaque, exposing no userinfo
-// to mask) by reparsing it as an authority. A password carrying an unescaped '/',
-// '?' or '#' breaks url.Parse; that form falls back to masking the password span
-// textually, so redaction fails closed. A credential-free host is returned
-// unchanged, so log greps on the hostname still match. Every host-URL log field and
-// validateHostScheme error message routes through it.
+// to mask) by reparsing it as an authority. url.Parse can also mis-read intended
+// userinfo without failing: an all-numeric password prefix parses as a port and a
+// short username parses as the host, leaving the credential in the path, query or
+// fragment (issue #55). An input that parses without userinfo but still carries a
+// raw '@' therefore falls through to be masked, except a parsed bracketed IPv6
+// authority, which can never be userinfo. A host with no '@' is returned unchanged,
+// and masking only ever replaces the span between the first ':' and the last '@',
+// so the hostname survives and log greps on it still match. Every host-URL log field
+// and validateHostScheme error message routes through it.
 //
 // Limitation: a password containing an unencoded "//" or "://" is indistinguishable
 // from URL scheme/authority structure (url.Parse reads it as a scheme and username),
@@ -243,12 +258,16 @@ func safeHost(host string) string {
 		if u.User != nil {
 			return u.Redacted()
 		}
-		// A well-formed hierarchical URL with a real host and no userinfo carries no
-		// credential: any ':' or '@' is in the host:port, path or query. A userinfo
-		// password that begins with '/' defeats that, because url.Parse mis-splits it
-		// into the path, leaving the host empty (scheme-less input) or ending in a
-		// bare ':' (scheme-present input); both fall through to be masked.
-		if u.Opaque == "" && u.Host != "" && !strings.HasSuffix(u.Host, ":") {
+		// A parsed URL with no userinfo can still be a mis-read credential: url.Parse
+		// turns user:digits into host:port and a short username into the host, leaving
+		// the '@' in the path, query or fragment (issue #55). Returning unchanged is
+		// only safe when the input carries no raw '@' at all, or when the parsed host
+		// is a bracketed IPv6 literal: '[' is an RFC 3986 gen-delim and invalid in
+		// userinfo, and an '@' inside a bracketed authority makes url.Parse fail with
+		// "invalid userinfo" rather than reach here. Anything else falls through to
+		// be masked.
+		if u.Opaque == "" && u.Host != "" && !strings.HasSuffix(u.Host, ":") &&
+			(!strings.ContainsRune(host, '@') || strings.HasPrefix(u.Host, "[")) {
 			return host
 		}
 	}
@@ -277,12 +296,13 @@ func displayHost(host string) string {
 	return redactedHostPlaceholder
 }
 
-// maskAuthorityPassword fails closed for host strings url.Parse cannot decode into
-// userinfo (a password with an unescaped '/', '?' or '#', a leading "://", or an
-// invalid percent-escape). It masks the password span from the first ':' to the
-// last '@' (the userinfo/host delimiter). A ':' sitting behind a path separator is
-// left alone, and a host with no userinfo is returned unchanged, so a legitimate
-// ':' or '@' in a path or query is never touched.
+// maskAuthorityPassword is the textual fail-closed fallback for host strings whose
+// userinfo url.Parse either rejects (a password with an unescaped '/', '?' or '#',
+// a leading "://", an invalid percent-escape) or silently mis-reads as host, port,
+// path, query or fragment (issue #55). It masks the span from the first ':' after
+// the authority marker to the last '@' (the userinfo/host delimiter). A string with
+// no '@', or with no ':' between the authority marker and the last '@', has no
+// password span and is returned unchanged.
 func maskAuthorityPassword(host string) string {
 	rest, prefix := host, ""
 	// A leading "scheme://" or "//" precedes the authority; only treat "//" as the
@@ -296,8 +316,8 @@ func maskAuthorityPassword(host string) string {
 	}
 	userinfo := rest[:at]
 	colon := strings.IndexByte(userinfo, ':')
-	if colon < 0 || strings.ContainsAny(userinfo[:colon], "/?#") {
-		return host // no password, or the ':' is in a path/query rather than userinfo
+	if colon < 0 {
+		return host // no ':' before the delimiter, so there is no password span
 	}
 	return prefix + userinfo[:colon] + ":xxxxx" + rest[at:]
 }
