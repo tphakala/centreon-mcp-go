@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -203,22 +204,18 @@ func gatewayMode(cfg *Config) bool {
 // exposes them on the wire (CWE-319). https is always accepted; http only when the
 // operator opts in via CENTREON_ALLOW_HTTP. A missing or non-http(s) scheme, or an
 // unparseable URL, is rejected outright (fail closed). url.Parse normalises the
-// scheme to lowercase, so the cases below are matched in lowercase. A host that
-// still contains a raw '@' the parser did not consume as userinfo is also rejected:
-// it is a mis-encoded credential or a malformed base URL either way (issue #55).
+// scheme to lowercase, so the cases below are matched in lowercase.
 func validateHostScheme(host string, allowHTTP bool) error {
 	u, err := url.Parse(host)
 	if err != nil {
-		return fmt.Errorf("invalid host url %q: %w", safeHost(host), err)
-	}
-	// url.Parse can accept a mis-encoded credential without reporting userinfo: an
-	// all-numeric password prefix parses as a port and a short username as the host,
-	// leaving the '@' in the path, query or fragment (issue #55). A Centreon base URL
-	// never contains a raw '@', so reject the whole class rather than let the
-	// mis-parsed authority become a live client. Gated on http(s) so a scheme problem
-	// keeps its own more specific message.
-	if (u.Scheme == schemeHTTPS || u.Scheme == schemeHTTP) && u.User == nil && strings.ContainsRune(host, '@') {
-		return fmt.Errorf("host %q contains an unencoded '@' after the authority: percent-encode userinfo characters (RFC 3986) or remove the credential", safeHost(host))
+		// url.Error.Error() embeds the URL it failed on, so wrapping err directly
+		// would reprint the raw credential that safeHost just masked in the same
+		// message (CWE-532). Wrap only the reason.
+		reason := err
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
+			reason = urlErr.Err
+		}
+		return fmt.Errorf("invalid host url %q: %w", safeHost(host), reason)
 	}
 	switch u.Scheme {
 	case schemeHTTPS:
@@ -240,41 +237,86 @@ func validateHostScheme(host string, allowHTTP bool) error {
 // standard scheme://user:pass@host form via url.Redacted and the scheme-less
 // user:pass@host form (which url.Parse treats as scheme:opaque, exposing no userinfo
 // to mask) by reparsing it as an authority. url.Parse can also mis-read intended
-// userinfo without failing: an all-numeric password prefix parses as a port and a
-// short username parses as the host, leaving the credential in the path, query or
-// fragment (issue #55). An input that parses without userinfo but still carries a
-// raw '@' therefore falls through to be masked, except a parsed bracketed IPv6
-// authority, which can never be userinfo. A host with no '@' is returned unchanged,
-// and masking only ever replaces the span between the first ':' and the last '@',
-// so the hostname survives and log greps on it still match. Every host-URL log field
-// and validateHostScheme error message routes through it.
+// userinfo without failing: an all-numeric password prefix parses as a port, a short
+// username parses as the host, and an email-style username makes the authority split
+// land on the wrong '@', each leaving the credential in the path, query or fragment
+// (issue #55). Any input those forms could describe falls through to be masked, so a
+// host is returned unchanged only when no reading of it places a password span in
+// the tail. Every host-URL log field and error message in this package routes
+// through it.
 //
 // Limitation: a password containing an unencoded "//" or "://" is indistinguishable
-// from URL scheme/authority structure (url.Parse reads it as a scheme and username),
+// from URL scheme/authority structure (url.Parse reads it as a scheme and an opaque
+// remainder, and the textual masker then treats the "//" as the authority marker),
 // so it may not be fully masked. RFC 3986 requires percent-encoding such characters
 // in userinfo; the realistic single-'/' base64 case is handled.
 func safeHost(host string) string {
 	if u, err := url.Parse(host); err == nil {
 		if u.User != nil {
-			return u.Redacted()
-		}
-		// A parsed URL with no userinfo can still be a mis-read credential: url.Parse
-		// turns user:digits into host:port and a short username into the host, leaving
-		// the '@' in the path, query or fragment (issue #55). Returning unchanged is
-		// only safe when the input carries no raw '@' at all, or when the parsed host
-		// is a bracketed IPv6 literal: '[' is an RFC 3986 gen-delim and invalid in
-		// userinfo, and an '@' inside a bracketed authority makes url.Parse fail with
-		// "invalid userinfo" rather than reach here. Anything else falls through to
-		// be masked.
-		if u.Opaque == "" && u.Host != "" && !strings.HasSuffix(u.Host, ":") &&
-			(!strings.ContainsRune(host, '@') || strings.HasPrefix(u.Host, "[")) {
+			if redactedCoversCredential(u, host) {
+				return u.Redacted()
+			}
+		} else if u.Opaque == "" && u.Host != "" && !strings.HasSuffix(u.Host, ":") &&
+			// A parsed URL with no userinfo can still be a mis-read credential:
+			// url.Parse turns user:digits into host:port and a short username into
+			// the host, leaving the '@' in the path, query or fragment (issue #55).
+			// Returning unchanged is safe only when the input carries no raw '@' at
+			// all, or when the parsed host is a bracketed IPv6 literal whose tail
+			// holds no password span. '[' is an RFC 3986 gen-delim and invalid in
+			// userinfo, so a bracketed authority cannot itself be a credential.
+			(!strings.ContainsRune(host, '@') ||
+				(strings.HasPrefix(u.Host, "[") && !tailCarriesPassword(host))) {
 			return host
 		}
 	}
-	if u, err := url.Parse("//" + host); err == nil && u.User != nil {
-		return strings.TrimPrefix(u.Redacted(), "//")
+	// The scheme-less user:pass@host form parses as scheme:opaque, so reparse it as
+	// an authority. Only the single-'@' form is unambiguous enough to trust: with a
+	// second '@' the reparse invents an authority out of "scheme:user", masks the
+	// wrong span, and leaves the real password in place.
+	if strings.Count(host, "@") == 1 {
+		if u, err := url.Parse("//" + host); err == nil && u.User != nil {
+			return strings.TrimPrefix(u.Redacted(), "//")
+		}
 	}
 	return maskAuthorityPassword(host)
+}
+
+// redactedCoversCredential reports whether url.Redacted masks the whole credential
+// for a URL url.Parse decoded userinfo from. It does not in two cases, both of them
+// the authority split landing on the wrong '@' (issue #55): an email-style username
+// makes url.Parse read a password-less userinfo, and a second ':' before a later
+// '@' leaves a password span in the tail. Redacted only ever masks the password it
+// parsed, and never looks at the path, query or fragment.
+func redactedCoversCredential(u *url.URL, host string) bool {
+	if tailCarriesPassword(host) {
+		return false
+	}
+	if _, hasPassword := u.User.Password(); hasPassword {
+		return true
+	}
+	return strings.Count(host, "@") == 1
+}
+
+// authorityTail returns the path, query and fragment of host, i.e. everything after
+// the authority. It works on the raw string because the inputs that matter here are
+// exactly the ones url.Parse splits in the wrong place.
+func authorityTail(host string) string {
+	rest := host
+	if i := strings.Index(rest, "//"); i >= 0 && !strings.ContainsAny(rest[:i], "/?#@") {
+		rest = rest[i+2:]
+	}
+	if j := strings.IndexAny(rest, "/?#"); j >= 0 {
+		return rest[j:]
+	}
+	return ""
+}
+
+// tailCarriesPassword reports whether the tail holds a ':' before a later '@', the
+// shape of a password span url.Parse did not decode as userinfo.
+func tailCarriesPassword(host string) bool {
+	tail := authorityTail(host)
+	at := strings.LastIndexByte(tail, '@')
+	return at >= 0 && strings.IndexByte(tail[:at], ':') >= 0
 }
 
 // displayHost reduces a host URL to scheme://host[:port] for display in a tool

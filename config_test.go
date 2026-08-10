@@ -262,14 +262,12 @@ func TestValidateHostScheme(t *testing.T) {
 		{"unsupported scheme rejected", "ftp://centreon.example.com", false, "unsupported scheme", ""},
 		{"host:port without scheme rejected as unsupported", "centreon.example.com:443", false, "unsupported scheme", ""},
 		{"unparseable host rejected", "127.0.0.1:8080", false, "invalid host url", ""},
-		// A raw '@' the parser did not consume as userinfo means the URL is either a
-		// mis-encoded credential or a malformed base URL; a Centreon base URL never
-		// contains one. Rejecting it stops the mis-parsed authority from becoming a
-		// live client, and the rejection message itself must stay redacted (#55).
-		{"rejects unencoded @ after authority", "https://admin:1234/secret@centreon.example.com", false, "unencoded '@'", "secret"},
-		{"rejects unencoded @ after portless authority", "https://us/er:secret@centreon.example.com", false, "unencoded '@'", "secret"},
-		{"rejects credential-free host with @ in path", "https://centreon.example.com:8080/a@b", false, "unencoded '@'", ""},
-		{"rejects unencoded @ over http with opt-in", "http://admin:1234/secret@centreon.example.com", true, "unencoded '@'", "secret"},
+		// url.Error.Error() reprints the URL it failed on, so wrapping it whole would
+		// undo the safeHost redaction in the very same message. These inputs fail
+		// url.Parse (an unescaped character in the password), so they exercise the
+		// parse-error branch, and notWant pins that the password stays out of it.
+		{"parse error keeps the password out of the message", "https://admin:se^kret@centreon.example.com", false, "invalid host url", "se^kret"},
+		{"parse error keeps a spaced password out of the message", "https://admin:se kret@centreon.example.com", false, "invalid host url", "se kret"},
 	}
 
 	for _, tt := range tests {
@@ -289,11 +287,12 @@ func TestValidateHostScheme(t *testing.T) {
 }
 
 // TestSafeHost pins that safeHost masks a userinfo password (so it cannot reach
-// logs or error messages, CWE-532) across every form that can carry one, including
-// the scheme-less user:pass@host form url.Redacted alone does not mask (issue #41)
-// and the forms url.Parse silently mis-reads as host, port, path, query or fragment
-// (issue #55). A host whose '@' cannot carry a password, and a bracketed IPv6
-// authority, are still returned byte for byte unchanged.
+// logs or error messages, CWE-532), including the scheme-less user:pass@host form
+// url.Redacted alone does not mask (issue #41) and the forms url.Parse silently
+// mis-reads as host, port, path, query or fragment (issue #55). A host whose '@'
+// cannot carry a password, and a bracketed IPv6 authority with no password span in
+// its tail, are still returned byte for byte unchanged. These rows are examples;
+// TestSafeHostNeverLeaksPassword sweeps the class.
 func TestSafeHost(t *testing.T) {
 	tests := []struct {
 		name string
@@ -345,6 +344,21 @@ func TestSafeHost(t *testing.T) {
 		// A username that merely starts with '[' is not a bracketed authority.
 		{"leaves IPv6 host with port and @ in path unchanged", "https://[2001:db8::1]:8443/x@y", "https://[2001:db8::1]:8443/x@y"},
 		{"masks username starting with a bracket", "https://[user:secret@centreon.example.com", "https://[user:xxxxx@centreon.example.com"},
+		// An email-style username makes url.Parse split the authority at the wrong
+		// '@', so it reports a password-less userinfo and url.Redacted has nothing to
+		// mask while the real password sits in the path, query or fragment (#55).
+		{"masks password behind an email-style username", "https://user@corp.com:1234/secret@centreon.example.com", "https://user@corp.com:xxxxx@centreon.example.com"},
+		{"masks password behind an email-style username in a query", "https://a@b:1234?secret@centreon.example.com", "https://a@b:xxxxx@centreon.example.com"},
+		{"masks password behind an email-style username in a fragment", "https://a@b:1234#secret@centreon.example.com", "https://a@b:xxxxx@centreon.example.com"},
+		// The opaque scheme:host form has no "//" authority marker, so the reparse
+		// fallback would invent one out of "https:user" and mask the wrong span.
+		{"masks opaque form with an email-style username", "https:user@corp.com:1234/secret@centreon.example.com", "https:xxxxx@centreon.example.com"},
+		// A bracketed IPv6 authority cannot be userinfo, but its tail still can, so
+		// the bracket exemption must not cover a password span after the authority.
+		{"masks a password span after a bracketed IPv6 authority", "https://[::1]/admin:secret@evil.example.com", "https://[:xxxxx@evil.example.com"},
+		// A real parsed password plus a second password span in the tail: Redacted
+		// masks only the first, so this must fall through to the textual masker.
+		{"masks a password span in the tail beside real userinfo", "https://admin:pw@centreon.example.com/x:secret@evil.example.com", "https://admin:xxxxx@evil.example.com"},
 		// Credential-free hosts must not be corrupted where that is decidable: a
 		// later '@' with no earlier ':' has no password span, and a bracketed IPv6
 		// authority can never be userinfo. A ':' followed by '@' after the authority
@@ -375,17 +389,39 @@ func TestSafeHost(t *testing.T) {
 }
 
 // TestSafeHostNeverLeaksPassword sweeps a constructed grid of credential-shaped
-// hosts and asserts the invariant the row table can only sample: a marker placed
-// in password position never survives safeHost. Three issues in a row (#41, #48,
-// #55) each turned up a shape the hand-written rows missed, so the class is pinned
-// by construction rather than by enumeration. A constructed grid is used instead of
-// go test -fuzz because random input has no oracle: nothing tells the fuzzer which
-// byte span was meant to be the password, whereas here the marker is known.
+// hosts and asserts the invariant the row table can only sample: a marker placed in
+// password position never survives safeHost. Both issues in this area (#41 and #55)
+// turned up shapes the hand-written rows missed, and #55 alone covered three
+// families, so the class is pinned by a grid rather than by enumeration. A
+// constructed grid is used rather than go test -fuzz because it is deterministic,
+// needs no corpus in the repo, and runs in ordinary CI; a fuzz target could build
+// the same oracle from separate username and password arguments, so the oracle is
+// not the reason.
 func TestSafeHostNeverLeaksPassword(t *testing.T) {
-	for _, host := range credentialHostGrid() {
-		if got := safeHost(host); strings.Contains(got, passwordMarker) {
-			t.Errorf("safeHost(%q) = %q, which leaks the password", host, got)
+	grid := credentialHostGrid()
+	// Without this the whole test passes vacuously if the builder ever returns
+	// nothing, which is the failure mode a pure absence assertion cannot see.
+	if len(grid) < 1000 {
+		t.Fatalf("credentialHostGrid() returned %d hosts, expected a full grid", len(grid))
+	}
+
+	failures := 0
+	for _, host := range grid {
+		// Positive control: the input must actually carry the marker, otherwise
+		// asserting its absence from the output proves nothing.
+		if !strings.Contains(host, passwordMarker) {
+			t.Fatalf("grid host %q does not contain the marker, the builder is wrong", host)
 		}
+		if got := safeHost(host); strings.Contains(got, passwordMarker) {
+			failures++
+			// Cap the output: a regression here leaks thousands of rows at once.
+			if failures <= 20 {
+				t.Errorf("safeHost(%q) = %q, which leaks the password", host, got)
+			}
+		}
+	}
+	if failures > 20 {
+		t.Errorf("safeHost leaked the password in %d of %d grid hosts", failures, len(grid))
 	}
 }
 
@@ -395,27 +431,34 @@ const passwordMarker = "SEKRIT"
 
 // credentialHostGrid builds credential-shaped host URLs by combining a scheme, a
 // username, a password holding passwordMarker, a host and a trailing path, query or
-// fragment. It covers the delimiter placements url.Parse mis-reads: an unencoded
-// '/', '?' or '#' in either the username or the password, and an all-numeric
-// password prefix that parses as a port (issue #55).
+// fragment. It covers the placements url.Parse mis-reads: an unencoded '/', '?' or
+// '#' in either the username or the password, an all-numeric password prefix that
+// parses as a port, an email-style username that moves the authority split onto the
+// wrong '@', and a second password span in the tail (issue #55).
 func credentialHostGrid() []string {
-	schemes := []string{"https://", "http://", "//", "://", ""}
-	usernames := []string{"admin", "us/er", "us?er", "us#er", "us.er", "[user", "us[er"}
+	schemes := []string{"https://", "http://", "//", "://", "", "https:"}
+	usernames := []string{
+		"admin", "us/er", "us?er", "us#er", "us.er", "[user", "us[er",
+		"user@corp.com", "a@b",
+	}
+	// No password here contains "//": that form is indistinguishable from URL
+	// scheme/authority structure and safeHost documents it as unmaskable, so the
+	// grid would assert a limitation rather than the fix.
 	passwords := []string{
 		passwordMarker, "1234/" + passwordMarker, "1234?" + passwordMarker,
 		"1234#" + passwordMarker, "/" + passwordMarker, "?" + passwordMarker,
 		"#" + passwordMarker, "aB9/" + passwordMarker, passwordMarker + "/tail",
-		"1234/sec:" + passwordMarker,
+		"1234/sec:" + passwordMarker, "pw/" + passwordMarker, "p@" + passwordMarker,
 	}
-	hosts := []string{"centreon.example.com", "centreon.example.com:8443", "[2001:db8::1]:8443"}
-	tails := []string{"", "/mon", "?q=1", "#f"}
+	hosts := []string{
+		"centreon.example.com", "centreon.example.com:8443",
+		"[2001:db8::1]:8443", "[::1]",
+	}
+	tails := []string{"", "/mon", "?q=1", "#f", "/a@b", "/d:" + passwordMarker + "@f"}
 
 	userinfos := make([]string, 0, len(usernames)*len(passwords))
 	for _, username := range usernames {
 		for _, password := range passwords {
-			if skipKnownFailOpen(username, password) {
-				continue
-			}
 			userinfos = append(userinfos, username+":"+password)
 		}
 	}
@@ -436,17 +479,6 @@ func credentialHostGrid() []string {
 		}
 	}
 	return grid
-}
-
-// skipKnownFailOpen excludes the two shape families safeHost documents as
-// unmaskable, so the sweep pins the fix without also asserting a behaviour the
-// helper never claimed. A password containing "//" is indistinguishable from URL
-// scheme/authority structure. A username starting with '[' combined with a ']' in
-// the password collides with a bracketed IPv6 authority; both brackets are RFC 3986
-// gen-delims and invalid in userinfo, so the authority reading wins.
-func skipKnownFailOpen(username, password string) bool {
-	return strings.Contains(password, "//") ||
-		(strings.HasPrefix(username, "[") && strings.Contains(password, "]"))
 }
 
 // TestDisplayHost pins that displayHost reduces a host URL to scheme://host[:port]
