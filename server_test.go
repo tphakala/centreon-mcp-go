@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestHostAllowed(t *testing.T) {
@@ -560,6 +562,90 @@ func TestGatewayServer_TokenCachePinsPassword(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&loginCount); n != 2 {
 		t.Fatalf("request 3: wrong password must force a fresh login (expected 2 total), got %d", n)
+	}
+}
+
+// callToolText extracts the first text content from a tool result.
+func callToolText(t *testing.T, res *mcp.CallToolResult) string {
+	t.Helper()
+	if len(res.Content) == 0 {
+		t.Fatal("result has no content")
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("first content is %T, want *mcp.TextContent", res.Content[0])
+	}
+	return tc.Text
+}
+
+// TestGatewayServer_ToolResponseReportsRedactedHost is an end-to-end guard for
+// #48: it drives gatewayServer with an X-Centreon-Host that embeds credentials,
+// then calls centreon_connection_test over an in-memory MCP session and asserts
+// the response names the per-request host with the password redacted, leaking
+// neither the password nor the token. This pins both the gateway threading and
+// the redaction at the gateway buildServer call site: passing the raw host
+// leaks the password, while passing cfg.Host (the gateway placeholder) drops the
+// loopback host:port. Either regression turns this red.
+func TestGatewayServer_ToolResponseReportsRedactedHost(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	const (
+		secret = "sup3r-s3cret-pass"
+		token  = "tok-abc"
+	)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	hostPort := strings.TrimPrefix(srv.URL, "http://")
+	hostWithCreds := "http://gwuser:" + secret + "@" + hostPort
+
+	cfg := &Config{AllowHTTP: true} // empty allowlist accepts any host; loopback http
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
+	req.Header.Set("X-Centreon-Host", hostWithCreds)
+	req.Header.Set("X-Centreon-Token", token)
+
+	s := gatewayServer(req, cfg, NewTokenCache(time.Minute), logger, nil)
+	if s == nil {
+		t.Fatal("gatewayServer returned nil")
+	}
+
+	ctx := t.Context()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	ss, err := s.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	t.Cleanup(func() { _ = ss.Close() })
+
+	c := mcp.NewClient(&mcp.Implementation{Name: "issue48-test", Version: "0"}, nil)
+	cs, err := c.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "centreon_connection_test"})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("connection test reported an error: %s", callToolText(t, res))
+	}
+
+	text := callToolText(t, res)
+	if want := "gwuser:xxxxx@" + hostPort; !strings.Contains(text, want) {
+		t.Errorf("response should name the redacted per-request host %q, got: %q", want, text)
+	}
+	if strings.Contains(text, secret) {
+		t.Errorf("response leaked the password, got: %q", text)
+	}
+	if strings.Contains(text, token) {
+		t.Errorf("response leaked the token, got: %q", text)
 	}
 }
 

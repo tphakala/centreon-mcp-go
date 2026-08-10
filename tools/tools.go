@@ -15,8 +15,11 @@ const (
 	defaultPageSize = 30
 )
 
-// RegisterAll registers all Centreon tools with the MCP server.
-func RegisterAll(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
+// RegisterAll registers all Centreon tools with the MCP server. host is the
+// display-only Centreon host surfaced by the status and connection tools; it
+// must already be credential-redacted by the caller (safeHost in package main),
+// as the tools package prints it verbatim and never redacts.
+func RegisterAll(s *mcp.Server, client *centreon.Client, logger *slog.Logger, host string) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -29,8 +32,8 @@ func RegisterAll(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	RegisterInfraTools(s, client, logger)
 	RegisterUserTools(s, client, logger)
 	RegisterNotificationTools(s, client, logger)
-	RegisterStatusTools(s, client, logger)
-	RegisterConnectionTools(s, client, logger)
+	RegisterStatusTools(s, client, logger, host)
+	RegisterConnectionTools(s, client, logger, host)
 }
 
 // readOnlyTool annotates a tool that only reads from the Centreon API (open world).
