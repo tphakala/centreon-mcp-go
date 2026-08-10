@@ -139,6 +139,9 @@ func TestGatewayServer_RedactsUserinfoInHostLogs(t *testing.T) {
 		// the one place an attacker supplies the header.
 		{"numeric-prefix password not in allowlist", allowlist, newReq("https://gwuser:1234/"+secret+"@evil.example.com", true), "gwuser:xxxxx@"},
 		{"email-style username not in allowlist", allowlist, newReq("https://gwuser@corp.com:1234/"+secret+"@evil.example.com", true), "gwuser@corp.com:xxxxx@"},
+		// A "//" inside the password posed as the authority marker, so the textual
+		// masker returned this host unmasked straight into the log.
+		{"password containing // not in allowlist", allowlist, newReq("gwuser:pw//"+secret+"@evil.example.com", true), "gwuser:xxxxx@"},
 		// empty allowlist + no credential headers -> missing-credentials path.
 		{"missing credentials", &Config{}, newReq("https://gwuser:"+secret+"@evil.example.com", false), "gwuser:xxxxx@"},
 	}

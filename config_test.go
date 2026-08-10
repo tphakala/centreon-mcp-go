@@ -362,10 +362,23 @@ func TestSafeHost(t *testing.T) {
 		{"masks opaque form with an email-style username", "https:user@corp.com:1234/secret@centreon.example.com", "https:xxxxx@centreon.example.com"},
 		// A bracketed IPv6 authority cannot be userinfo, but its tail still can, so
 		// the bracket exemption must not cover a password span after the authority.
-		{"masks a password span after a bracketed IPv6 authority", "https://[::1]/admin:secret@evil.example.com", "https://[:xxxxx@evil.example.com"},
+		// The address' own colons must not be taken for the password delimiter
+		// either, or the host collapses to "[" and the log line loses its target.
+		{"masks a password span after a bracketed IPv6 authority", "https://[::1]/admin:secret@evil.example.com", "https://[::1]/admin:xxxxx@evil.example.com"},
+		{"keeps a bracketed IPv6 host and port while masking the tail", "https://[2001:db8::1]:8443?owner:secret@evil.example.com", "https://[2001:db8::1]:xxxxx@evil.example.com"},
+		{"keeps an IPv6 zone ID while masking the tail", "https://[fe80::1%25eth0]:8443/mon?u=a:secret@c", "https://[fe80::1%25eth0]:xxxxx@c"},
+		// A bracket-prefixed username is not an IPv6 literal, so its first ':' is
+		// still the delimiter.
+		{"masks a bracket-prefixed username that is not an IP", "https://[notanip:secret]x@centreon.example.com", "https://[notanip:xxxxx@centreon.example.com"},
 		// A real parsed password plus a second password span in the tail: Redacted
 		// masks only the first, so this must fall through to the textual masker.
 		{"masks a password span in the tail beside real userinfo", "https://admin:pw@centreon.example.com/x:secret@evil.example.com", "https://admin:xxxxx@evil.example.com"},
+		// A "//" inside the password used to pose as the authority marker, so the
+		// textual masker treated the real password as the authority and returned the
+		// host unmasked. Only a leading "//" or one behind a valid scheme counts now.
+		{"masks a scheme-less password containing //", "admin:pw//secret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		{"masks a scheme-less password containing ://", "admin:pw://secret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		{"masks a base64-style password containing //", "admin:aB9//xY2z@centreon.example.com", "admin:xxxxx@centreon.example.com"},
 		// Credential-free hosts must not be corrupted where that is decidable: a
 		// later '@' with no earlier ':' has no password span, and a bracketed IPv6
 		// authority can never be userinfo. A ':' followed by '@' after the authority
@@ -448,14 +461,17 @@ func credentialHostGrid() []string {
 		"admin", "us/er", "us?er", "us#er", "us.er", "[user", "us[er",
 		"user@corp.com", "a@b",
 	}
-	// No password here contains "//": that form is indistinguishable from URL
-	// scheme/authority structure and safeHost documents it as unmaskable, so the
-	// grid would assert a limitation rather than the fix.
+	// A password BEGINNING with "://" is deliberately absent: behind a scheme-shaped
+	// username that is byte-for-byte a scheme://authority URL whose userinfo holds a
+	// username and no password, which safeHost never masks. safeHost documents it.
+	// Every other "//" placement is covered, including mid-password, which is the
+	// realistic base64 case.
 	passwords := []string{
 		passwordMarker, "1234/" + passwordMarker, "1234?" + passwordMarker,
 		"1234#" + passwordMarker, "/" + passwordMarker, "?" + passwordMarker,
 		"#" + passwordMarker, "aB9/" + passwordMarker, passwordMarker + "/tail",
 		"1234/sec:" + passwordMarker, "pw/" + passwordMarker, "p@" + passwordMarker,
+		"pw//" + passwordMarker, "pw://" + passwordMarker, "aB9//" + passwordMarker,
 	}
 	hosts := []string{
 		"centreon.example.com", "centreon.example.com:8443",

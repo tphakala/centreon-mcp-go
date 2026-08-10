@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -245,11 +246,12 @@ func validateHostScheme(host string, allowHTTP bool) error {
 // input, so the masked host is the one the credential reading implies, which is not
 // always the authority the client actually dialled.
 //
-// Limitation: a password containing an unencoded "//" or "://" is indistinguishable
-// from URL scheme/authority structure (url.Parse reads it as a scheme and an opaque
-// remainder, and the textual masker then treats the "//" as the authority marker),
-// so it may not be fully masked. RFC 3986 requires percent-encoding such characters
-// in userinfo; the realistic single-'/' base64 case is handled.
+// Limitation: a password that BEGINS with "://" behind a username that is itself a
+// valid URL scheme (as in "admin://secret@host") is not masked, because that is
+// byte-for-byte a scheme://authority URL whose userinfo is the username "secret"
+// with no password at all, and safeHost never masks a username. A "//" anywhere
+// else in the password, including the realistic base64 case, is handled. RFC 3986
+// requires percent-encoding these characters in userinfo.
 func safeHost(host string) string {
 	if u, err := url.Parse(host); err == nil {
 		if u.User != nil {
@@ -303,13 +305,49 @@ func redactedCoversCredential(u *url.URL, host string) bool {
 // splits in the wrong place, so this works on the raw string instead.
 func authorityTail(host string) string {
 	rest := host
-	if i := strings.Index(rest, "//"); i >= 0 && !strings.ContainsAny(rest[:i], "/?#@") {
-		rest = rest[i+2:]
+	if k := authorityMarker(rest); k >= 0 {
+		rest = rest[k:]
 	}
 	if j := strings.IndexAny(rest, "/?#"); j >= 0 {
 		return rest[j:]
 	}
 	return ""
+}
+
+// authorityMarker returns the index just past the "//" that introduces the
+// authority, or -1 when host has none. Only a leading "//" or one preceded by a
+// syntactically valid scheme counts. Accepting any "//" instead would let a
+// password containing one pose as the authority marker, which swallowed the real
+// password span and returned the host unmasked.
+func authorityMarker(host string) int {
+	const separator = "//"
+	i := strings.Index(host, separator)
+	switch {
+	case i < 0:
+		return -1
+	case i == 0:
+		return len(separator)
+	case host[i-1] == ':' && isURLScheme(host[:i-1]):
+		return i + len(separator)
+	default:
+		return -1
+	}
+}
+
+// isURLScheme reports whether s is a valid RFC 3986 scheme: ALPHA followed by any
+// of ALPHA, DIGIT, '+', '-' and '.'. The empty string is accepted so the malformed
+// but already-pinned "://host" form keeps its authority marker.
+func isURLScheme(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // tailCarriesPassword reports whether the tail holds a ':' before a later '@', the
@@ -348,19 +386,43 @@ func displayHost(host string) string {
 // password span and is returned unchanged.
 func maskAuthorityPassword(host string) string {
 	rest, prefix := host, ""
-	// A leading "scheme://" or "//" precedes the authority; only treat "//" as the
-	// authority marker when nothing path-like or an '@' comes before it.
-	if i := strings.Index(rest, "//"); i >= 0 && !strings.ContainsAny(rest[:i], "/?#@") {
-		prefix, rest = rest[:i+2], rest[i+2:]
+	if k := authorityMarker(rest); k >= 0 {
+		prefix, rest = rest[:k], rest[k:]
 	}
 	at := strings.LastIndexByte(rest, '@')
 	if at < 0 {
 		return host // no userinfo
 	}
 	userinfo := rest[:at]
-	colon := strings.IndexByte(userinfo, ':')
+	colon := userinfoColon(userinfo)
 	if colon < 0 {
 		return host // no ':' before the delimiter, so there is no password span
 	}
 	return prefix + userinfo[:colon] + ":xxxxx" + rest[at:]
+}
+
+// userinfoColon returns the index of the ':' that starts the password span, or -1.
+// A leading bracketed IPv6 literal is skipped so its own colons are not mistaken
+// for the delimiter, which would otherwise mask from inside the address and leave
+// a truncated "[" where the host should be. The literal must parse as an IP, so a
+// bracket-prefixed username such as "[user:secret" still masks at its real colon.
+func userinfoColon(userinfo string) int {
+	from := 0
+	if strings.HasPrefix(userinfo, "[") {
+		if end := strings.IndexByte(userinfo, ']'); end > 0 {
+			literal := userinfo[1:end]
+			// A zone ID ("%25eth0" once percent-encoded) is not part of the address.
+			if pct := strings.IndexByte(literal, '%'); pct >= 0 {
+				literal = literal[:pct]
+			}
+			if net.ParseIP(literal) != nil {
+				from = end + 1
+			}
+		}
+	}
+	colon := strings.IndexByte(userinfo[from:], ':')
+	if colon < 0 {
+		return -1
+	}
+	return from + colon
 }
