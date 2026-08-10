@@ -240,10 +240,10 @@ func validateHostScheme(host string, allowHTTP bool) error {
 // userinfo without failing: an all-numeric password prefix parses as a port, a short
 // username parses as the host, and an email-style username makes the authority split
 // land on the wrong '@', each leaving the credential in the path, query or fragment
-// (issue #55). Any input those forms could describe falls through to be masked, so a
-// host is returned unchanged only when no reading of it places a password span in
-// the tail. Every host-URL log field and error message in this package routes
-// through it.
+// (issue #55). A host is returned unchanged only when no reading of it places a
+// password span in the tail. Masking is textual once url.Parse has mis-read the
+// input, so the masked host is the one the credential reading implies, which is not
+// always the authority the client actually dialled.
 //
 // Limitation: a password containing an unencoded "//" or "://" is indistinguishable
 // from URL scheme/authority structure (url.Parse reads it as a scheme and an opaque
@@ -282,11 +282,11 @@ func safeHost(host string) string {
 }
 
 // redactedCoversCredential reports whether url.Redacted masks the whole credential
-// for a URL url.Parse decoded userinfo from. It does not in two cases, both of them
-// the authority split landing on the wrong '@' (issue #55): an email-style username
-// makes url.Parse read a password-less userinfo, and a second ':' before a later
-// '@' leaves a password span in the tail. Redacted only ever masks the password it
-// parsed, and never looks at the path, query or fragment.
+// for a URL url.Parse decoded userinfo from. It does not when a ':' before a later
+// '@' leaves a password span in the tail, nor when the userinfo carries no password
+// and the host holds more than one '@', which means the authority split landed on
+// an '@' that was part of the username (issue #55). Redacted only ever masks the
+// password it parsed, and never looks at the path, query or fragment.
 func redactedCoversCredential(u *url.URL, host string) bool {
 	if tailCarriesPassword(host) {
 		return false
@@ -297,9 +297,10 @@ func redactedCoversCredential(u *url.URL, host string) bool {
 	return strings.Count(host, "@") == 1
 }
 
-// authorityTail returns the path, query and fragment of host, i.e. everything after
-// the authority. It works on the raw string because the inputs that matter here are
-// exactly the ones url.Parse splits in the wrong place.
+// authorityTail returns everything from the first '/', '?' or '#' that follows the
+// authority marker. That is not always url.Parse's own path/query/fragment split,
+// and deliberately so: the inputs that matter here are exactly the ones url.Parse
+// splits in the wrong place, so this works on the raw string instead.
 func authorityTail(host string) string {
 	rest := host
 	if i := strings.Index(rest, "//"); i >= 0 && !strings.ContainsAny(rest[:i], "/?#@") {

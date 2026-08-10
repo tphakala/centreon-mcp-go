@@ -268,6 +268,13 @@ func TestValidateHostScheme(t *testing.T) {
 		// parse-error branch, and notWant pins that the password stays out of it.
 		{"parse error keeps the password out of the message", "https://admin:se^kret@centreon.example.com", false, "invalid host url", "se^kret"},
 		{"parse error keeps a spaced password out of the message", "https://admin:se kret@centreon.example.com", false, "invalid host url", "se kret"},
+		// A raw '@' after the authority is NOT rejected. It is indistinguishable
+		// from a mis-encoded credential, so safeHost masks it, but rejecting the
+		// host would refuse legitimate base URLs carrying an '@' in a path or
+		// query. Redaction is the control here, not validation (issue #55).
+		{"accepts a credential-free host with @ in the path", "https://centreon.example.com:8080/a@b", false, "", ""},
+		{"accepts an @ in the path with no colon", "https://centreon.example.com/api@v1", false, "", ""},
+		{"accepts a mis-encoded credential, redaction is the control", "https://admin:1234/secret@centreon.example.com", false, "", ""},
 	}
 
 	for _, tt := range tests {
@@ -391,8 +398,8 @@ func TestSafeHost(t *testing.T) {
 // TestSafeHostNeverLeaksPassword sweeps a constructed grid of credential-shaped
 // hosts and asserts the invariant the row table can only sample: a marker placed in
 // password position never survives safeHost. Both issues in this area (#41 and #55)
-// turned up shapes the hand-written rows missed, and #55 alone covered three
-// families, so the class is pinned by a grid rather than by enumeration. A
+// turned up shapes the hand-written rows missed, so the class is pinned by varying
+// every placement that moves the authority split rather than by enumeration. A
 // constructed grid is used rather than go test -fuzz because it is deterministic,
 // needs no corpus in the repo, and runs in ordinary CI; a fuzz target could build
 // the same oracle from separate username and password arguments, so the oracle is
