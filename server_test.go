@@ -123,14 +123,27 @@ func TestGatewayServer_RedactsUserinfoInHostLogs(t *testing.T) {
 		name string
 		cfg  *Config
 		req  *http.Request
+		// wantMask is the redacted userinfo the log line must show. It varies by
+		// row because url.Parse splits the authority at a different '@' depending
+		// on the shape, so a single literal cannot cover them all.
+		wantMask string
 	}{
 		// The host-not-in-allowlist path logs before validateHostScheme, so it sees
 		// the raw header for both the standard and the scheme-less credential form
 		// (the scheme-less form is the one url.Redacted alone would miss, issue #41).
-		{"scheme-ful host not in allowlist", allowlist, newReq("https://gwuser:"+secret+"@evil.example.com", true)},
-		{"scheme-less host not in allowlist", allowlist, newReq("gwuser:"+secret+"@evil.example.com", true)},
+		{"scheme-ful host not in allowlist", allowlist, newReq("https://gwuser:"+secret+"@evil.example.com", true), "gwuser:xxxxx@"},
+		{"scheme-less host not in allowlist", allowlist, newReq("gwuser:"+secret+"@evil.example.com", true), "gwuser:xxxxx@"},
+		// Issue #55: url.Parse mis-reads these as host:port or as a password-less
+		// userinfo, so url.Redacted masks nothing. This log runs before
+		// validateHostScheme, so safeHost is the only control on this sink and it is
+		// the one place an attacker supplies the header.
+		{"numeric-prefix password not in allowlist", allowlist, newReq("https://gwuser:1234/"+secret+"@evil.example.com", true), "gwuser:xxxxx@"},
+		{"email-style username not in allowlist", allowlist, newReq("https://gwuser@corp.com:1234/"+secret+"@evil.example.com", true), "gwuser@corp.com:xxxxx@"},
+		// A "//" inside the password posed as the authority marker, so the textual
+		// masker returned this host unmasked straight into the log.
+		{"password containing // not in allowlist", allowlist, newReq("gwuser:pw//"+secret+"@evil.example.com", true), "gwuser:xxxxx@"},
 		// empty allowlist + no credential headers -> missing-credentials path.
-		{"missing credentials", &Config{}, newReq("https://gwuser:"+secret+"@evil.example.com", false)},
+		{"missing credentials", &Config{}, newReq("https://gwuser:"+secret+"@evil.example.com", false), "gwuser:xxxxx@"},
 	}
 
 	for _, tt := range tests {
@@ -151,8 +164,8 @@ func TestGatewayServer_RedactsUserinfoInHostLogs(t *testing.T) {
 			if strings.Contains(out, secret) {
 				t.Errorf("log leaked embedded password (CWE-532): %s", out)
 			}
-			if !strings.Contains(out, "gwuser:xxxxx@") {
-				t.Errorf("expected redacted host (url.Redacted) in log, got: %s", out)
+			if !strings.Contains(out, tt.wantMask) {
+				t.Errorf("expected redacted host containing %q in log, got: %s", tt.wantMask, out)
 			}
 		})
 	}

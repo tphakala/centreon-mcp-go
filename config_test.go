@@ -262,6 +262,19 @@ func TestValidateHostScheme(t *testing.T) {
 		{"unsupported scheme rejected", "ftp://centreon.example.com", false, "unsupported scheme", ""},
 		{"host:port without scheme rejected as unsupported", "centreon.example.com:443", false, "unsupported scheme", ""},
 		{"unparseable host rejected", "127.0.0.1:8080", false, "invalid host url", ""},
+		// url.Error.Error() reprints the URL it failed on, so wrapping it whole would
+		// undo the safeHost redaction in the very same message. These inputs fail
+		// url.Parse (an unescaped character in the password), so they exercise the
+		// parse-error branch, and notWant pins that the password stays out of it.
+		{"parse error keeps the password out of the message", "https://admin:se^kret@centreon.example.com", false, "invalid host url", "se^kret"},
+		{"parse error keeps a spaced password out of the message", "https://admin:se kret@centreon.example.com", false, "invalid host url", "se kret"},
+		// A raw '@' after the authority is NOT rejected. It is indistinguishable
+		// from a mis-encoded credential, so safeHost masks it, but rejecting the
+		// host would refuse legitimate base URLs carrying an '@' in a path or
+		// query. Redaction is the control here, not validation (issue #55).
+		{"accepts a credential-free host with @ in the path", "https://centreon.example.com:8080/a@b", false, "", ""},
+		{"accepts an @ in the path with no colon", "https://centreon.example.com/api@v1", false, "", ""},
+		{"accepts a mis-encoded credential, redaction is the control", "https://admin:1234/secret@centreon.example.com", false, "", ""},
 	}
 
 	for _, tt := range tests {
@@ -281,9 +294,12 @@ func TestValidateHostScheme(t *testing.T) {
 }
 
 // TestSafeHost pins that safeHost masks a userinfo password (so it cannot reach
-// logs or error messages, CWE-532) across every form that can carry one, including
-// the scheme-less user:pass@host form url.Redacted alone does not mask (issue #41),
-// while leaving a credential-free host byte for byte unchanged.
+// logs or error messages, CWE-532), including the scheme-less user:pass@host form
+// url.Redacted alone does not mask (issue #41) and the forms url.Parse silently
+// mis-reads as host, port, path, query or fragment (issue #55). A host whose '@'
+// cannot carry a password, and a bracketed IPv6 authority with no password span in
+// its tail, are still returned byte for byte unchanged. These rows are examples;
+// TestSafeHostNeverLeaksPassword sweeps the class.
 func TestSafeHost(t *testing.T) {
 	tests := []struct {
 		name string
@@ -312,10 +328,68 @@ func TestSafeHost(t *testing.T) {
 		{"masks password beginning with a slash", "https://admin:/sekret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
 		{"masks scheme-less password beginning with a slash", "admin:/sekret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
 		{"masks scheme-less password beginning with a question mark", "admin:?sekret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
-		// Credential-free hosts whose path or query legitimately contains ':' or '@'
-		// must never be corrupted.
-		{"leaves host:port with @ in path unchanged", "https://centreon.example.com:8080/a@b", "https://centreon.example.com:8080/a@b"},
-		{"leaves : and @ in query unchanged", "https://centreon.example.com:8443/x?a=b:c@d", "https://centreon.example.com:8443/x?a=b:c@d"},
+		// url.Parse can mis-read intended userinfo without failing: an all-numeric
+		// password prefix parses as a port, so admin:1234 becomes host:port and the
+		// password tail lands in the path, query or fragment (issue #55).
+		{"masks numeric-prefix password with a slash", "https://admin:1234/secret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		{"masks numeric-prefix password with a question mark", "https://admin:1234?secret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		{"masks numeric-prefix password with a hash", "https://admin:1234#secret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		{"masks numeric-prefix password ahead of a real host:port", "https://admin:1234/secret@centreon.example.com:8443/mon", "https://admin:xxxxx@centreon.example.com:8443/mon"},
+		{"masks protocol-relative numeric-prefix password", "//admin:1234/secret@centreon.example.com", "//admin:xxxxx@centreon.example.com"},
+		// The same mis-read happens from the username side: an unencoded '/', '?' or
+		// '#' in the username makes url.Parse take the leading span as the host and
+		// leave the whole credential in the path, query or fragment (issue #55).
+		{"masks password behind a username with a slash", "https://us/er:secret@centreon.example.com", "https://us/er:xxxxx@centreon.example.com"},
+		{"masks password behind a username with a question mark", "https://us?er:secret@centreon.example.com", "https://us?er:xxxxx@centreon.example.com"},
+		{"masks password behind a username with a hash", "https://us#er:secret@centreon.example.com", "https://us#er:xxxxx@centreon.example.com"},
+		// A ':' before a later raw '@' always admits a credential reading, so it is
+		// masked whether or not url.Parse decoded the URL (issue #55).
+		{"masks ambiguous colon and @ after a portless authority", "https://centreon.example.com/a:b@c", "https://centreon.example.com/a:xxxxx@c"},
+		{"masks ambiguous colon and @ in an unparseable URL", "https://host/%zz/a:b@c", "https://host/%zz/a:xxxxx@c"},
+		// A bracketed authority is a genuine IPv6 literal: '[' is an RFC 3986
+		// gen-delim and invalid in userinfo, so it cannot be a mis-read credential.
+		// A username that merely starts with '[' is not a bracketed authority.
+		{"leaves IPv6 host with port and @ in path unchanged", "https://[2001:db8::1]:8443/x@y", "https://[2001:db8::1]:8443/x@y"},
+		{"masks username starting with a bracket", "https://[user:secret@centreon.example.com", "https://[user:xxxxx@centreon.example.com"},
+		// An email-style username makes url.Parse split the authority at the wrong
+		// '@', so it reports a password-less userinfo and url.Redacted has nothing to
+		// mask while the real password sits in the path, query or fragment (#55).
+		{"masks password behind an email-style username", "https://user@corp.com:1234/secret@centreon.example.com", "https://user@corp.com:xxxxx@centreon.example.com"},
+		{"masks password behind an email-style username in a query", "https://a@b:1234?secret@centreon.example.com", "https://a@b:xxxxx@centreon.example.com"},
+		{"masks password behind an email-style username in a fragment", "https://a@b:1234#secret@centreon.example.com", "https://a@b:xxxxx@centreon.example.com"},
+		// The opaque scheme:host form has no "//" authority marker, so the reparse
+		// fallback would invent one out of "https:user" and mask the wrong span.
+		{"masks opaque form with an email-style username", "https:user@corp.com:1234/secret@centreon.example.com", "https:xxxxx@centreon.example.com"},
+		// A bracketed IPv6 authority cannot be userinfo, but its tail still can, so
+		// the bracket exemption must not cover a password span after the authority.
+		// The address' own colons must not be taken for the password delimiter
+		// either, or the host collapses to "[" and the log line loses its target.
+		{"masks a password span after a bracketed IPv6 authority", "https://[::1]/admin:secret@evil.example.com", "https://[::1]/admin:xxxxx@evil.example.com"},
+		{"keeps a bracketed IPv6 host and port while masking the tail", "https://[2001:db8::1]:8443?owner:secret@evil.example.com", "https://[2001:db8::1]:xxxxx@evil.example.com"},
+		{"keeps an IPv6 zone ID while masking the tail", "https://[fe80::1%25eth0]:8443/mon?u=a:secret@c", "https://[fe80::1%25eth0]:xxxxx@c"},
+		// A bracket-prefixed username is not an IPv6 literal, so its first ':' is
+		// still the delimiter.
+		{"masks a bracket-prefixed username that is not an IP", "https://[notanip:secret]x@centreon.example.com", "https://[notanip:xxxxx@centreon.example.com"},
+		// A real parsed password plus a second password span in the tail: Redacted
+		// masks only the first, so this must fall through to the textual masker.
+		{"masks a password span in the tail beside real userinfo", "https://admin:pw@centreon.example.com/x:secret@evil.example.com", "https://admin:xxxxx@evil.example.com"},
+		// A "//" inside the password used to pose as the authority marker, so the
+		// textual masker treated the real password as the authority and returned the
+		// host unmasked. Only a leading "//" or one behind a valid scheme counts now.
+		{"masks a scheme-less password containing //", "admin:pw//secret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		{"masks a scheme-less password containing ://", "admin:pw://secret@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		{"masks a base64-style password containing //", "admin:aB9//xY2z@centreon.example.com", "admin:xxxxx@centreon.example.com"},
+		// Credential-free hosts must not be corrupted where that is decidable: a
+		// later '@' with no earlier ':' has no password span, and a bracketed IPv6
+		// authority can never be userinfo. A ':' followed by '@' after the authority
+		// is genuinely ambiguous and fails closed instead (issue #55).
+		//
+		// These two rows changed with #55. "https://centreon.example.com:8080/a@b" is
+		// byte-for-byte indistinguishable from user "centreon.example.com", password
+		// "8080/a", host "b", so redaction fails closed; the text before the first
+		// ':' survives, so hostname greps still match.
+		{"masks ambiguous host:port with @ in path", "https://centreon.example.com:8080/a@b", "https://centreon.example.com:xxxxx@b"},
+		{"masks ambiguous : and @ in query", "https://centreon.example.com:8443/x?a=b:c@d", "https://centreon.example.com:xxxxx@d"},
 		{"leaves IPv6 host with @ in path unchanged", "https://[2001:db8::1]/x@y", "https://[2001:db8::1]/x@y"},
 		{"leaves scheme-less host with @ in path unchanged", "centreon.example.com/a@b", "centreon.example.com/a@b"},
 		{"leaves plain host unchanged", "https://centreon.example.com", "https://centreon.example.com"},
@@ -332,6 +406,102 @@ func TestSafeHost(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSafeHostNeverLeaksPassword sweeps a constructed grid of credential-shaped
+// hosts and asserts the invariant the row table can only sample: a marker placed in
+// password position never survives safeHost. Both issues in this area (#41 and #55)
+// turned up shapes the hand-written rows missed, so the class is pinned by varying
+// every placement that moves the authority split rather than by enumeration. A
+// constructed grid is used rather than go test -fuzz because it is deterministic,
+// needs no corpus in the repo, and runs in ordinary CI; a fuzz target could build
+// the same oracle from separate username and password arguments, so the oracle is
+// not the reason.
+func TestSafeHostNeverLeaksPassword(t *testing.T) {
+	grid := credentialHostGrid()
+	// Without this the whole test passes vacuously if the builder ever returns
+	// nothing, which is the failure mode a pure absence assertion cannot see.
+	if len(grid) < 1000 {
+		t.Fatalf("credentialHostGrid() returned %d hosts, expected a full grid", len(grid))
+	}
+
+	failures := 0
+	for _, host := range grid {
+		// Positive control: the input must actually carry the marker, otherwise
+		// asserting its absence from the output proves nothing.
+		if !strings.Contains(host, passwordMarker) {
+			t.Fatalf("grid host %q does not contain the marker, the builder is wrong", host)
+		}
+		if got := safeHost(host); strings.Contains(got, passwordMarker) {
+			failures++
+			// Cap the output: a regression here leaks thousands of rows at once.
+			if failures <= 20 {
+				t.Errorf("safeHost(%q) = %q, which leaks the password", host, got)
+			}
+		}
+	}
+	if failures > 20 {
+		t.Errorf("safeHost leaked the password in %d of %d grid hosts", failures, len(grid))
+	}
+}
+
+// passwordMarker appears only in password position in the credentialHostGrid
+// inputs, so finding it in safeHost output is unambiguously a leak.
+const passwordMarker = "SEKRIT"
+
+// credentialHostGrid builds credential-shaped host URLs by combining a scheme, a
+// username, a password holding passwordMarker, a host and a trailing path, query or
+// fragment. It covers the placements url.Parse mis-reads: an unencoded '/', '?' or
+// '#' in either the username or the password, an all-numeric password prefix that
+// parses as a port, an email-style username that moves the authority split onto the
+// wrong '@', and a second password span in the tail (issue #55).
+func credentialHostGrid() []string {
+	schemes := []string{"https://", "http://", "//", "://", "", "https:"}
+	usernames := []string{
+		"admin", "us/er", "us?er", "us#er", "us.er", "[user", "us[er",
+		"user@corp.com", "a@b",
+	}
+	// A password BEGINNING with "://" is deliberately absent: behind a scheme-shaped
+	// username that is byte-for-byte a scheme://authority URL whose userinfo holds a
+	// username and no password, which safeHost never masks. safeHost documents it.
+	// Every other "//" placement is covered, including mid-password, which is the
+	// realistic base64 case.
+	passwords := []string{
+		passwordMarker, "1234/" + passwordMarker, "1234?" + passwordMarker,
+		"1234#" + passwordMarker, "/" + passwordMarker, "?" + passwordMarker,
+		"#" + passwordMarker, "aB9/" + passwordMarker, passwordMarker + "/tail",
+		"1234/sec:" + passwordMarker, "pw/" + passwordMarker, "p@" + passwordMarker,
+		"pw//" + passwordMarker, "pw://" + passwordMarker, "aB9//" + passwordMarker,
+	}
+	hosts := []string{
+		"centreon.example.com", "centreon.example.com:8443",
+		"[2001:db8::1]:8443", "[::1]",
+	}
+	tails := []string{"", "/mon", "?q=1", "#f", "/a@b", "/d:" + passwordMarker + "@f"}
+
+	userinfos := make([]string, 0, len(usernames)*len(passwords))
+	for _, username := range usernames {
+		for _, password := range passwords {
+			userinfos = append(userinfos, username+":"+password)
+		}
+	}
+
+	targets := make([]string, 0, len(hosts)*len(tails))
+	for _, host := range hosts {
+		for _, tail := range tails {
+			targets = append(targets, host+tail)
+		}
+	}
+
+	grid := make([]string, 0, len(schemes)*len(userinfos)*len(targets))
+	for _, scheme := range schemes {
+		for _, userinfo := range userinfos {
+			for _, target := range targets {
+				grid = append(grid, scheme+userinfo+"@"+target)
+			}
+		}
+	}
+	return grid
 }
 
 // TestDisplayHost pins that displayHost reduces a host URL to scheme://host[:port]
