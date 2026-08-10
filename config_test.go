@@ -355,7 +355,8 @@ func TestDisplayHost(t *testing.T) {
 		// host:port; displayHost still does not leak the "secret" password span, and
 		// this malformed form is not reachable through the success-gated tool sink.
 		{"does not leak password on the numeric-prefix form", "https://admin:1234/secret@centreon.example.com", "https://admin:1234"},
-		{"fails closed on empty", "", "(redacted host)"},
+		{"fails closed on empty", "", redactedHostPlaceholder},
+		{"fails closed on a hostless authority", "https://:8443", redactedHostPlaceholder},
 	}
 
 	for _, tt := range tests {

@@ -266,11 +266,15 @@ func safeHost(host string) string {
 // display-path caller first runs the host through validateHostScheme, which
 // guarantees a parseable http/https URL, so the fail-closed placeholder is a
 // defensive fallback that never fires for a validated host.
+// redactedHostPlaceholder is the fail-closed display value for a host that has no
+// usable hostname, so a malformed or hostless input is never echoed verbatim.
+const redactedHostPlaceholder = "(redacted host)"
+
 func displayHost(host string) string {
-	if u, err := url.Parse(host); err == nil && u.Host != "" {
+	if u, err := url.Parse(host); err == nil && u.Hostname() != "" {
 		return u.Scheme + "://" + u.Host
 	}
-	return "(redacted host)"
+	return redactedHostPlaceholder
 }
 
 // maskAuthorityPassword fails closed for host strings url.Parse cannot decode into
