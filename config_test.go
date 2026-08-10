@@ -334,6 +334,40 @@ func TestSafeHost(t *testing.T) {
 	}
 }
 
+// TestDisplayHost pins that displayHost reduces a host URL to scheme://host[:port]
+// for a tool response, stripping the username as well as the password (issue #48
+// requires no username/password/token in the response), unlike safeHost which
+// keeps the username for log greps.
+func TestDisplayHost(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{"strips username and password", "https://gwuser:sekret@centreon.example.com", "https://centreon.example.com"},
+		{"strips username-only userinfo", "https://gwuser@centreon.example.com", "https://centreon.example.com"},
+		{"strips userinfo over http", "http://admin:sekret@centreon.example.com", "http://centreon.example.com"},
+		{"keeps host and port", "https://centreon.example.com:8443", "https://centreon.example.com:8443"},
+		{"strips path and query", "https://centreon.example.com:8443/mon?q=1", "https://centreon.example.com:8443"},
+		{"strips userinfo with port and path", "https://admin:sekret@centreon.example.com:8443/mon", "https://centreon.example.com:8443"},
+		{"leaves plain host unchanged", "https://centreon.example.com", "https://centreon.example.com"},
+		// The numeric-prefix userinfo form (issue #55) is mis-parsed by url.Parse as
+		// host:port; displayHost still does not leak the "secret" password span, and
+		// this malformed form is not reachable through the success-gated tool sink.
+		{"does not leak password on the numeric-prefix form", "https://admin:1234/secret@centreon.example.com", "https://admin:1234"},
+		{"fails closed on empty", "", redactedHostPlaceholder},
+		{"fails closed on a hostless authority", "https://:8443", redactedHostPlaceholder},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := displayHost(tt.host); got != tt.want {
+				t.Errorf("displayHost(%q) = %q, want %q", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestLoadConfig_HostScheme pins that CENTREON_HOST is scheme-checked at load,
 // gated by CENTREON_ALLOW_HTTP, and skipped only in HTTP gateway mode where the
 // host is an unused placeholder. It also pins that stdio+gateway still validates,

@@ -34,6 +34,10 @@ func (h *errorCountHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 
 func (h *errorCountHandler) WithGroup(string) slog.Handler { return h }
 
+// testStatusHost is the already-redacted display host threaded into the status
+// handler under test; the handler must surface it verbatim.
+const testStatusHost = "https://centreon.example.com"
+
 // textOf extracts the first text content from a tool result.
 func textOf(t *testing.T, res *mcp.CallToolResult) string {
 	t.Helper()
@@ -64,7 +68,7 @@ func TestPlatformStatusHandlerFn_CombinesResults(t *testing.T) {
 		}, nil
 	}
 
-	handler := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, testLogger(t))
+	handler := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, testLogger(t), testStatusHost)
 	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, struct{}{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -88,6 +92,9 @@ func TestPlatformStatusHandlerFn_CombinesResults(t *testing.T) {
 	}
 	if got.Servers == nil || len(got.Servers.Result) != 1 || got.Servers.Result[0].Name != "poller-7" {
 		t.Errorf("servers not placed correctly: %+v", got.Servers)
+	}
+	if got.Host != testStatusHost {
+		t.Errorf("host = %q, want %q", got.Host, testStatusHost)
 	}
 }
 
@@ -115,7 +122,7 @@ func TestPlatformStatusHandlerFn_RunsConcurrently(t *testing.T) {
 		return &centreon.ListResponse[centreon.MonitoringServer]{}, nil
 	}
 
-	handler := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, testLogger(t))
+	handler := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, testLogger(t), testStatusHost)
 	done := make(chan struct{})
 	go func() {
 		_, _, _ = handler(t.Context(), &mcp.CallToolRequest{}, struct{}{})
@@ -182,7 +189,7 @@ func TestPlatformStatusHandlerFn_ReportsError(t *testing.T) {
 				}
 			}
 
-			handler := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, testLogger(t))
+			handler := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, testLogger(t), testStatusHost)
 			res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, struct{}{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -190,8 +197,12 @@ func TestPlatformStatusHandlerFn_ReportsError(t *testing.T) {
 			if !res.IsError {
 				t.Fatal("expected error result")
 			}
-			if text := textOf(t, res); !strings.Contains(text, tt.wantMessage) {
+			text := textOf(t, res)
+			if !strings.Contains(text, tt.wantMessage) {
 				t.Errorf("error result should identify the failing call %q, got: %q", tt.wantMessage, text)
+			}
+			if strings.Contains(text, testStatusHost) {
+				t.Errorf("error result should not include the host, got: %q", text)
 			}
 		})
 	}
@@ -221,7 +232,7 @@ func TestPlatformStatusHandlerFn_SuppressesCancellationLogs(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	h := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, logger)
+	h := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, logger, testStatusHost)
 	res, _, err := h(t.Context(), &mcp.CallToolRequest{}, struct{}{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

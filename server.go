@@ -51,13 +51,16 @@ const (
 	gatewayLogoutConcurrency = 16
 )
 
-// buildServer creates an MCP server with all tools registered.
-func buildServer(client *centreon.Client, logger *slog.Logger) *mcp.Server {
+// buildServer creates an MCP server with all tools registered. displayHostName
+// is the Centreon host the status and connection tools report; the caller must
+// already have passed it through displayHost (which strips all userinfo), as
+// buildServer does not sanitize.
+func buildServer(client *centreon.Client, logger *slog.Logger, displayHostName string) *mcp.Server {
 	s := mcp.NewServer(
 		&mcp.Implementation{Name: "centreon-mcp-go", Version: version},
 		&mcp.ServerOptions{Instructions: serverInstructions},
 	)
-	tools.RegisterAll(s, client, logger)
+	tools.RegisterAll(s, client, logger, displayHostName)
 	return s
 }
 
@@ -202,7 +205,7 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient 
 		logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
 	}
 
-	s := buildServer(client, logger)
+	s := buildServer(client, logger, displayHost(cfg.Host))
 	logger.Info("centreon-mcp-go ready", "transport", "stdio")
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
@@ -234,6 +237,10 @@ func logoutClientBounded(ctx context.Context, client *centreon.Client, logger *s
 func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *http.Client) error {
 	var sharedClient *centreon.Client
 	var tokenCache *TokenCache
+	// envDisplayHost is the redacted host the tools report in env mode; computed
+	// once here rather than per request. In gateway mode the per-request host is
+	// used instead (see gatewayServer), so this stays empty.
+	var envDisplayHost string
 
 	if cfg.AuthMode == authModeEnv {
 		client, err := newCentreonClient(cfg.Host, cfg, logger, httpClient)
@@ -247,6 +254,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 			logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
 		}
 		sharedClient = client
+		envDisplayHost = displayHost(cfg.Host)
 	} else {
 		tokenCache = NewTokenCache(tokenCacheTTL)
 		if len(cfg.AllowedHosts) == 0 {
@@ -258,7 +266,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 
 	getServer := func(r *http.Request) *mcp.Server {
 		if cfg.AuthMode == authModeEnv {
-			return buildServer(sharedClient, logger)
+			return buildServer(sharedClient, logger, envDisplayHost)
 		}
 		return gatewayServer(r, cfg, tokenCache, logger, httpClient)
 	}
@@ -408,7 +416,7 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 	}
 
 	logger.Debug("gateway: created per-request client", "host", safeHost(host))
-	return buildServer(client, logger)
+	return buildServer(client, logger, displayHost(host))
 }
 
 // hostAllowed reports whether host may be used in gateway mode. An empty

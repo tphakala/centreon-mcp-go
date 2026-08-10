@@ -60,7 +60,7 @@ func TestTDQS_ToolDefinitionsQuality(t *testing.T) {
 	ctx := t.Context()
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "centreon-mcp-go", Version: "test"}, nil)
-	RegisterAll(s, &centreon.Client{}, nil)
+	RegisterAll(s, &centreon.Client{}, nil, "https://tdqs.example.com")
 
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 	ss, err := s.Connect(ctx, serverTransport, nil)
