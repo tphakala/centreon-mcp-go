@@ -372,23 +372,46 @@ func tailCarriesPassword(host string) bool {
 	return at >= 0 && strings.IndexByte(tail[:at], ':') >= 0
 }
 
+// redactedHostPlaceholder is the fail-closed display value for a host whose
+// authority cannot be trusted, so a malformed, hostless or mis-parsed input is
+// never echoed verbatim.
+const redactedHostPlaceholder = "(redacted host)"
+
 // displayHost reduces a host URL to scheme://host[:port] for display in a tool
 // response, stripping ALL userinfo (username and password) plus any path, query
 // and fragment, so no credential embedded in the URL reaches a client. This is
 // stricter than safeHost, which keeps the username for log greps: issue #48
-// requires the response to expose no username, password or token. Every
-// display-path caller first runs the host through validateHostScheme, which
-// guarantees a parseable http/https URL, so the fail-closed placeholder is a
-// defensive fallback that never fires for a validated host.
-// redactedHostPlaceholder is the fail-closed display value for a host that has no
-// usable hostname, so a malformed or hostless input is never echoed verbatim.
-const redactedHostPlaceholder = "(redacted host)"
-
+// requires the response to expose no username, password or token.
+//
+// It echoes the parsed authority only when url.Parse accounted for every '@' in
+// the input. The authority ends at the first '/', '?' or '#', so an unencoded one
+// inside userinfo makes url.Parse read the credential as the host:
+// "https://admin:1234/secret@centreon.example.com" parses with host "admin:1234",
+// and that "1234" is the first segment of the password the operator typed (issue
+// #57). scheme://X/Y@Z cannot be told apart from userinfo X/Y plus host Z without
+// resolving names, so the placeholder also fires for a legitimate '@' in a path or
+// query; displayHost discards both anyway. A bracketed IPv6 authority is exempt,
+// since '[' is invalid in userinfo and such an authority cannot be a credential.
 func displayHost(host string) string {
-	if u, err := url.Parse(host); err == nil && u.Hostname() != "" {
+	u, err := url.Parse(host)
+	if err != nil || u.Hostname() == "" {
+		return redactedHostPlaceholder
+	}
+	if u.User != nil {
+		// url.Parse decoded userinfo, so trust its split only when the decode
+		// accounts for the whole credential. redactedCoversCredential rejects a
+		// leftover password span in the tail and the ambiguous multi-'@' form.
+		if !redactedCoversCredential(u, host) {
+			return redactedHostPlaceholder
+		}
 		return u.Scheme + "://" + u.Host
 	}
-	return redactedHostPlaceholder
+	// No userinfo was decoded, so any raw '@' means the authority url.Parse chose
+	// may be a credential rather than the host.
+	if strings.ContainsRune(host, '@') && !strings.HasPrefix(u.Host, "[") {
+		return redactedHostPlaceholder
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // maskAuthorityPassword is the textual fail-closed fallback for host strings whose

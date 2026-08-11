@@ -532,10 +532,31 @@ func TestDisplayHost(t *testing.T) {
 		{"strips path and query", "https://centreon.example.com:8443/mon?q=1", "https://centreon.example.com:8443"},
 		{"strips userinfo with port and path", "https://admin:sekret@centreon.example.com:8443/mon", "https://centreon.example.com:8443"},
 		{"leaves plain host unchanged", "https://centreon.example.com", "https://centreon.example.com"},
-		// The numeric-prefix userinfo form (issue #55) is mis-parsed by url.Parse as
-		// host:port; displayHost still does not leak the "secret" password span, and
-		// this malformed form is not reachable through the success-gated tool sink.
-		{"does not leak password on the numeric-prefix form", "https://admin:1234/secret@centreon.example.com", "https://admin:1234"},
+		// An '@' that url.Parse did not account for as the whole credential means the
+		// parsed authority may be the credential rather than the host, so echoing it
+		// can hand a fragment of the operator's password to a client (issue #57).
+		// The first row expected "https://admin:1234" before that fix, where 1234 is
+		// the first segment of the password the operator typed.
+		{"fails closed on the numeric-prefix credential form", "https://admin:1234/secret@centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on the short-username credential form", "https://us/er:secret@centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on the multi-at credential form", "https://user@corp.example:1234/Sekr1tPass@10.0.0.5", redactedHostPlaceholder},
+		// A colon-free credential is the same hazard with no password span to find:
+		// url.Parse reads "mysecret" as the host, and safeHost leaves the string
+		// untouched because what it sees is a username, which it keeps by design.
+		{"fails closed on a colon-free credential mis-read as the host", "https://mysecret/password@centreon.example.com", redactedHostPlaceholder},
+		// scheme://X/Y@Z cannot be told apart from userinfo X/Y plus host Z without
+		// resolving names, so a legitimate '@' in a path or query fails closed too.
+		// displayHost discards the path and query anyway, so nothing is lost beyond
+		// naming the host.
+		{"fails closed on an at sign in the path", "https://centreon.example.com/api@v1", redactedHostPlaceholder},
+		{"fails closed on an at sign in the query", "https://centreon.example.com?q=a@b", redactedHostPlaceholder},
+		{"fails closed when a port colon precedes a path at sign", "https://centreon.example.com:8080/a@b", redactedHostPlaceholder},
+		// '[' is invalid in userinfo, so a bracketed authority cannot itself be a
+		// credential and stays trusted even with an '@' later in the URL.
+		{"keeps a bracketed ipv6 host", "https://[::1]:8443", "https://[::1]:8443"},
+		{"keeps a bracketed ipv6 host despite an at sign in the path", "https://[::1]:8443/path@x", "https://[::1]:8443"},
+		{"keeps a host whose password is empty", "https://user:@centreon.example.com", "https://centreon.example.com"},
+		{"keeps a host whose password is percent-encoded", "https://user:p%40ss@centreon.example.com", "https://centreon.example.com"},
 		{"fails closed on empty", "", redactedHostPlaceholder},
 		{"fails closed on a hostless authority", "https://:8443", redactedHostPlaceholder},
 	}
