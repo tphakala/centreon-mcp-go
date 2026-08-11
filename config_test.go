@@ -337,7 +337,13 @@ func TestSafeHost(t *testing.T) {
 		{"masks leading //authority userinfo", "//admin:sekret@centreon.example.com", "//admin:xxxxx@centreon.example.com"},
 		{"masks empty-scheme ://authority userinfo", "://admin:sekret@centreon.example.com", "://admin:xxxxx@centreon.example.com"},
 		{"masks userinfo with port and path", "https://admin:sekret@centreon.example.com:8443/mon?q=1", "https://admin:xxxxx@centreon.example.com:8443/mon?q=1"},
-		{"masks userinfo when the path also has @", "https://admin:sekret@centreon.example.com/p@th", "https://admin:xxxxx@centreon.example.com/p@th"},
+		// A '@' surviving after the authority is ambiguous: url.Parse's benign reading
+		// (host centreon.example.com, path /p@th) is byte-for-byte the credential
+		// reading (password sekret@centreon.example.com/p, host th), so safeHost fails
+		// closed and masks to the last '@' rather than leak a password of that shape
+		// (issue #62). The pre-colon text still greps. Same fail-closed rule the
+		// ambiguous colon-and-@ rows below already apply.
+		{"fails closed when a @ survives after the authority", "https://admin:sekret@centreon.example.com/p@th", "https://admin:xxxxx@th"},
 		// url.Parse fails outright on the bad percent-escape, so the textual fallback
 		// must still redact rather than return the raw credential.
 		{"masks userinfo in an unparseable URL", "https://admin:sekret@centreon.example.com/%zz", "https://admin:xxxxx@centreon.example.com/%zz"},
@@ -395,6 +401,62 @@ func TestSafeHost(t *testing.T) {
 		// A real parsed password plus a second password span in the tail: Redacted
 		// masks only the first, so this must fall through to the textual masker.
 		{"masks a password span in the tail beside real userinfo", "https://admin:pw@centreon.example.com/x:secret@evil.example.com", "https://admin:xxxxx@evil.example.com"},
+		// Issue #62, family 1: a password holding a raw '@' before a '/', '?' or '#'
+		// makes url.Parse decode only a fragment as userinfo and read the rest as
+		// host/path, so url.Redacted masks the fragment and leaves the rest verbatim.
+		// safeHost must fall through to the textual masker, which masks to the last '@'.
+		{"masks a raw @ password before a slash", "https://admin:se@cret/path@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		{"masks a raw @ password before a slash, second host", "https://user:pass1@pass2/word@centreon.example.com", "https://user:xxxxx@centreon.example.com"},
+		{"masks a raw @ password with a long tail", "https://admin:p@ssw0rdLONGSECRET/x@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
+		// Issue #62, family 2: the delimiter can arrive percent-encoded, so there is no
+		// raw '@' for the unchanged-return or the masker to key on; both decode it. The
+		// encoded delimiter is kept verbatim in the output so the host still greps.
+		{"masks a %40 delimiter after a slash", "https://admin:1234/SECRETpassword%40centreon.example.com", "https://admin:xxxxx%40centreon.example.com"},
+		{"masks a %40 delimiter after a question mark", "https://admin:1234?SECRETpassword%40centreon.example.com", "https://admin:xxxxx%40centreon.example.com"},
+		// A raw '@' in the password ahead of an encoded delimiter: the masker takes the
+		// LATER encoded '@' as the delimiter, so the whole span collapses to xxxxx.
+		{"masks a raw @ password ahead of an encoded delimiter", "https://admin:p@ssword%40centreon.example.com", "https://admin:xxxxx%40centreon.example.com"},
+		// Encoded twice, so a "%40" substring test would miss it; peeled up to 4 layers.
+		{"masks a double-encoded delimiter", "https://admin:1234/secret%2540centreon.example.com", "https://admin:xxxxx%2540centreon.example.com"},
+		{"masks the scheme-less encoded-delimiter form", "admin:secret%40centreon.example.com", "admin:xxxxx%40centreon.example.com"},
+		// Fail closed on an encoded delimiter behind a real port (the issue #61 trade:
+		// the port is masked, the pre-colon host still greps), the encoded analog of
+		// the ambiguous host:port-with-@ rows in this table.
+		{"fails closed on an encoded delimiter behind a port", "https://centreon.example.com:8443/report%40q", "https://centreon.example.com:xxxxx%40q"},
+		// Benign escapes with no password span before them must be left intact.
+		{"leaves an encoded @ with no colon before it unchanged", "https://centreon.example.com/report%40q", "https://centreon.example.com/report%40q"},
+		{"leaves an ordinary encoded space unchanged", "https://centreon.example.com/mon%20test", "https://centreon.example.com/mon%20test"},
+		{"leaves a non-delimiter escape unchanged", "https://centreon.example.com/pw%4chost", "https://centreon.example.com/pw%4chost"},
+		// A bracketed IPv6 authority is exempt, but an encoded password span in its
+		// tail is not; a colon-free encoded '@' in the tail still is exempt.
+		{"masks an encoded password span after a bracketed IPv6 authority", "https://[::1]/admin:secret%40evil.example.com", "https://[::1]/admin:xxxxx%40evil.example.com"},
+		{"leaves an IPv6 host with an encoded @ and no colon in the tail unchanged", "https://[::1]/x%40y", "https://[::1]/x%40y"},
+		// url.Parse rejects a '%40' inside an IPv6 zone (only '%25' is a valid zone
+		// escape), so safeHost reaches the textual masker. The '%40' must NOT be taken
+		// for a userinfo delimiter that masks from inside the address: the bracketed
+		// span is a valid IPv6 literal, so there is no credential and the host is left
+		// intact (issue #62; without the guard this masked to "[fe80:xxxxx%40en0]").
+		{"leaves an IPv6 host with a %40 zone unchanged", "https://[fe80::1%40en0]:8443", "https://[fe80::1%40en0]:8443"},
+		{"leaves an IPv6 host with a %40 zone and path unchanged", "https://[2001:db8::1%40x]/mon", "https://[2001:db8::1%40x]/mon"},
+		// The unclosed-bracket exemption must not fail open: a valid IP followed by a
+		// '%' and then a ':password' is NOT a zoned host, it hides a credential. Only
+		// the whole post-'[' span parsing as an IP earns the exemption, so this masks
+		// (masking a mis-parsed bracketed authority is the issue #61 trade, never a leak).
+		{"masks a password after a fake zone in an unclosed IPv6 bracket", "https://[192.168.0.1%x:secret@host", "https://[192.168.0.1%x:xxxxx@host"},
+		// The delimiter can be nested arbitrarily deep; the masker peels every layer,
+		// so a bound cannot be outrun to leave the password verbatim (5 layers here).
+		{"masks a five-layer encoded delimiter", "https://admin:secret%2525252540centreon.example.com", "https://admin:xxxxx%2525252540centreon.example.com"},
+		{"masks a raw @ password ahead of a five-layer encoded delimiter", "https://admin:p@ssword%2525252540centreon.example.com", "https://admin:xxxxx%2525252540centreon.example.com"},
+		// The issue #61 log-integrity trade extended to an encoded delimiter: once a
+		// real userinfo is decoded but a %40 survives in the tail, the input is the
+		// same ambiguous shape as a password whose own delimiter is encoded (compare
+		// "admin:x@SEKRIT/p%40host", where SEKRIT is password material). safeHost
+		// cannot tell them apart, so it fails closed and masks to the encoded '@',
+		// losing the host rather than risk leaking a password. A '%40' in the path or
+		// query of a Centreon base URL does not occur in practice, so this costs a log
+		// only on inputs that do not arise; it never leaks.
+		{"fails closed on an encoded @ in the path beside real userinfo", "https://admin:secret@centreon.example.com/api%40v1", "https://admin:xxxxx%40v1"},
+		{"fails closed on an encoded @ in the query beside real userinfo", "https://admin:secret@centreon.example.com?q=1%402", "https://admin:xxxxx%402"},
 		// A "//" inside the password used to pose as the authority marker, so the
 		// textual masker treated the real password as the authority and returned the
 		// host unmasked. Only a leading "//" or one behind a valid scheme counts now.
@@ -446,6 +508,12 @@ func TestSafeHostNeverLeaksPassword(t *testing.T) {
 	if len(grid) < 1000 {
 		t.Fatalf("credentialHostGrid() returned %d hosts, expected a full grid", len(grid))
 	}
+	// Also sweep the percent-encoded delimiter (issue #62 family 2), once and twice
+	// encoded. These inputs carry no raw '@', so before the fix safeHost either
+	// returned them unchanged or masked to a non-existent raw '@'; the marker
+	// survived. The display test does not get these joins, see its note.
+	grid = append(grid, credentialHostGridJoined("%40")...)
+	grid = append(grid, credentialHostGridJoined("%2540")...)
 
 	failures := 0
 	for _, host := range grid {
@@ -495,6 +563,12 @@ func namesAnIntendedHost(out string) bool {
 // hand-written TestDisplayHost rows were written from; those rows are the
 // reproduction, and this is the guard against the next shape.
 func TestDisplayHostNamesOnlyARealHost(t *testing.T) {
+	// Only the raw-'@' grid, not the "%40"/"%2540" joins the safeHost sweep adds.
+	// "%25" is legal in a host, so a double-encoded input like
+	// "https://admin:p@SEKRIT%2540centreon.example.com" parses with host
+	// "SEKRIT%2540centreon.example.com" and displayHost echoes it; that is a
+	// separate, pre-existing displayHost hole tracked outside issue #62, not a
+	// regression this test should assert against.
 	grid := credentialHostGrid()
 	if len(grid) < 1000 {
 		t.Fatalf("credentialHostGrid() returned %d hosts, expected a full grid", len(grid))
@@ -553,7 +627,17 @@ var credentialGridHosts = []string{
 // '#' in either the username or the password, an all-numeric password prefix that
 // parses as a port, an email-style username that moves the authority split onto the
 // wrong '@', and a second password span in the tail (issue #55).
-func credentialHostGrid() []string {
+func credentialHostGrid() []string { return credentialHostGridJoined("@") }
+
+// credentialHostGridJoined is credentialHostGrid parameterised by the bytes that
+// join the userinfo to the target. The raw "@" join is the credential form
+// url.Parse decodes and is what the display test and the raw-'@' half of the
+// safeHost sweep use. "%40" (and its multiply-encoded spelling "%2540") is the
+// percent-encoded delimiter of issue #62: it carries no raw '@' at all, so the
+// unchanged-return and the textual masker both have to decode it to find the
+// password span. Only the safeHost sweep feeds the encoded joins; the display
+// test deliberately does not (see the note there).
+func credentialHostGridJoined(join string) []string {
 	schemes := []string{"https://", "http://", "//", "://", "", "https:"}
 	usernames := []string{
 		"admin", "us/er", "us?er", "us#er", "us.er", "[user", "us[er",
@@ -570,6 +654,11 @@ func credentialHostGrid() []string {
 		"#" + passwordMarker, "aB9/" + passwordMarker, passwordMarker + "/tail",
 		"1234/sec:" + passwordMarker, "pw/" + passwordMarker, "p@" + passwordMarker,
 		"pw//" + passwordMarker, "pw://" + passwordMarker, "aB9//" + passwordMarker,
+		// Marker AFTER an internal '@' and before a '/', '?' or '#'. url.Parse decodes
+		// the pre-'@' fragment as userinfo and reads the marker as the host, so
+		// url.Redacted masks only the fragment and the marker leaks; the marker-only
+		// assertion can finally see the family-1 class (issue #62).
+		"x@" + passwordMarker + "/p", "x@" + passwordMarker + "?q", "x@" + passwordMarker + "#f",
 	}
 	hosts := credentialGridHosts
 	tails := []string{"", "/mon", "?q=1", "#f", "/a@b", "/d:" + passwordMarker + "@f"}
@@ -592,7 +681,7 @@ func credentialHostGrid() []string {
 	for _, scheme := range schemes {
 		for _, userinfo := range userinfos {
 			for _, target := range targets {
-				grid = append(grid, scheme+userinfo+"@"+target)
+				grid = append(grid, scheme+userinfo+join+target)
 			}
 		}
 	}

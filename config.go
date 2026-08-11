@@ -283,21 +283,28 @@ func safeHost(host string) string {
 			// A parsed URL with no userinfo can still be a mis-read credential:
 			// url.Parse turns user:digits into host:port and a short username into
 			// the host, leaving the '@' in the path, query or fragment (issue #55).
-			// Returning unchanged is safe only when the input carries no raw '@' at
-			// all, or when the parsed host is a bracketed IPv6 literal whose tail
-			// holds no password span. '[' is an RFC 3986 gen-delim and invalid in
-			// userinfo, so a bracketed authority cannot itself be a credential.
-			(!strings.ContainsRune(host, '@') ||
+			// Returning unchanged is safe only when the input carries no at sign that
+			// could be a userinfo delimiter, raw OR percent-encoded as %40, which
+			// tailCarriesAtSign decodes (issue #62); or when the parsed host is a
+			// bracketed IPv6 literal whose tail holds no password span. '[' is an RFC
+			// 3986 gen-delim and invalid in userinfo, so a bracketed authority cannot
+			// itself be a credential. afterAuthorityDelimiter (not authorityTail) is
+			// used so an encoded '@' sitting in the authority of a host:port form, with
+			// no '/', '?' or '#' after it, is still seen.
+			((!strings.ContainsRune(host, '@') && !tailCarriesAtSign(afterAuthorityDelimiter(host))) ||
 				(strings.HasPrefix(u.Host, "[") && !tailCarriesPassword(host))) {
 			return host
 		}
 	}
 	// The scheme-less user:pass@host form parses as scheme:opaque, so reparse it as
-	// an authority. Only the single-'@' form is unambiguous enough to trust: with a
-	// second '@' the reparse invents an authority out of "scheme:user", masks the
-	// wrong span, and leaves the real password in place.
+	// an authority. Only the single-'@' form with no further at sign after the
+	// delimiter is unambiguous enough to trust: a second '@' (raw, or percent-encoded
+	// as %40 in the tail) means the reparse would invent an authority out of
+	// "scheme:user" or mask the wrong span and leave the real password in place, so
+	// those fall through to the textual masker instead (issues #55, #62).
 	if strings.Count(host, "@") == 1 {
-		if u, err := url.Parse("//" + host); err == nil && u.User != nil {
+		if u, err := url.Parse("//" + host); err == nil && u.User != nil &&
+			!tailCarriesAtSign(afterAuthorityDelimiter(host)) {
 			return strings.TrimPrefix(u.Redacted(), "//")
 		}
 	}
@@ -305,13 +312,15 @@ func safeHost(host string) string {
 }
 
 // redactedCoversCredential reports whether url.Redacted masks the whole credential
-// for a URL url.Parse decoded userinfo from. It does not when a ':' before a later
-// '@' leaves a password span in the tail, nor when the userinfo carries no password
-// and the host holds more than one '@', which means the authority split landed on
-// an '@' that was part of the username (issue #55). Redacted only ever masks the
-// password it parsed, and never looks at the path, query or fragment.
+// for a URL url.Parse decoded userinfo from. It does not when an at sign, raw or
+// percent-encoded as %40, survives after the '@' url.Parse split the authority at:
+// the split may then have landed inside the password and left the rest in the host,
+// path, query or fragment (issues #55, #62). It also does not when the userinfo
+// carries no password and the host holds more than one '@', which means the split
+// landed on an '@' that was part of the username. Redacted only ever masks the
+// password it parsed, and never looks past the authority it chose.
 func redactedCoversCredential(u *url.URL, host string) bool {
-	if tailCarriesPassword(host) {
+	if tailCarriesAtSign(afterAuthorityDelimiter(host)) {
 		return false
 	}
 	if _, hasPassword := u.User.Password(); hasPassword {
@@ -333,6 +342,30 @@ func authorityTail(host string) string {
 		return rest[j:]
 	}
 	return ""
+}
+
+// afterAuthorityDelimiter returns the span of host that follows the '@' url.Parse
+// takes as the userinfo/host delimiter: the last raw '@' inside the authority (the
+// text between the "//" marker and the first '/', '?' or '#'). It differs from
+// authorityTail, which starts at that first '/', '?' or '#' and so cannot see the
+// host remnant a mis-read leaves before it ("cret" in "admin:se@cret/path@host").
+// With no raw '@' in the authority it returns the whole post-marker span, so an
+// encoded delimiter further along is still in view. This reproduces Parse's own
+// split point textually, which is what lets safeHost tell a decoded password that
+// Redacted fully covers from one it only partly covers (issue #62).
+func afterAuthorityDelimiter(host string) string {
+	rest := host
+	if k := authorityMarker(rest); k >= 0 {
+		rest = rest[k:]
+	}
+	auth := rest
+	if j := strings.IndexAny(rest, "/?#"); j >= 0 {
+		auth = rest[:j]
+	}
+	if at := strings.LastIndexByte(auth, '@'); at >= 0 {
+		return rest[at+1:]
+	}
+	return rest
 }
 
 // authorityMarker returns the index just past the "//" that introduces the
@@ -372,10 +405,13 @@ func isURLScheme(s string) bool {
 }
 
 // tailCarriesPassword reports whether the tail holds a ':' before a later '@', the
-// shape of a password span url.Parse did not decode as userinfo.
+// shape of a password span url.Parse did not decode as userinfo. The '@' may be
+// percent-encoded (%40), so the delimiter is located with lastAtDelimiter rather
+// than a raw-byte search; this closes the same hole in a bracketed-IPv6 tail that
+// the encoded-delimiter fix closes elsewhere (issue #62).
 func tailCarriesPassword(host string) bool {
 	tail := authorityTail(host)
-	at := strings.LastIndexByte(tail, '@')
+	at := lastAtDelimiter(tail)
 	return at >= 0 && strings.IndexByte(tail[:at], ':') >= 0
 }
 
@@ -466,15 +502,17 @@ func tailCarriesAtSign(tail string) bool {
 // userinfo url.Parse either rejects (a password with an unescaped '/', '?' or '#',
 // a leading "://", an invalid percent-escape) or silently mis-reads as host, port,
 // path, query or fragment (issue #55). It masks the span from the first ':' after
-// the authority marker to the last '@' (the userinfo/host delimiter). A string with
-// no '@', or with no ':' between the authority marker and the last '@', has no
-// password span and is returned unchanged.
+// the authority marker to the delimiter '@', found by lastAtDelimiter so a
+// percent-encoded delimiter (%40) is located too (issue #62). A string with no
+// delimiter, or with no ':' before it, has no password span and is returned
+// unchanged. The encoded delimiter is kept verbatim in the output, so the host
+// after it still greps.
 func maskAuthorityPassword(host string) string {
 	rest, prefix := host, ""
 	if k := authorityMarker(rest); k >= 0 {
 		prefix, rest = rest[:k], rest[k:]
 	}
-	at := strings.LastIndexByte(rest, '@')
+	at := lastAtDelimiter(rest)
 	if at < 0 {
 		return host // no userinfo
 	}
@@ -503,6 +541,16 @@ func userinfoColon(userinfo string) int {
 			if net.ParseIP(literal) != nil {
 				from = end + 1
 			}
+		} else if net.ParseIP(userinfo[1:]) != nil {
+			// No closing ']': the delimiter the caller found sits inside the bracket
+			// because url.Parse rejected the authority (an invalid '%40' zone lands
+			// here, issue #62) and the ']' fell past it. Only when the ENTIRE span
+			// after '[' is a valid IP is it the host literal with no password to mask,
+			// so return -1. net.ParseIP rejects a zone or a ':' after the address, so a
+			// span like "[192.168.0.1%x:secret" is NOT taken as bare host: it falls
+			// through and its ':secret' is masked below. (Stripping at '%' first would
+			// misread that as a zoned address and leak the password.)
+			return -1
 		}
 	}
 	colon := strings.IndexByte(userinfo[from:], ':')
@@ -510,4 +558,43 @@ func userinfoColon(userinfo string) int {
 		return -1
 	}
 	return from + colon
+}
+
+// lastAtDelimiter returns the index in s of the position that acts as the
+// userinfo/host delimiter: the last raw '@', or a later percent-escape that encodes
+// '@' through any number of layers ("%40", "%2540", "%252540", ...). It returns -1
+// when neither is present. A raw '@' after such an escape wins, matching url.Parse,
+// which splits at the last raw '@'; an escape after the last raw '@' is the
+// dangerous case a raw search misses (the hybrid "admin:p@ssword%40host", issue
+// #62). Escapes that do not provably decode to '@' (a malformed "%zz", or "%4c" for
+// 'L') are not delimiters, so an ordinary encoded path is left intact.
+func lastAtDelimiter(s string) int {
+	at := strings.LastIndexByte(s, '@')
+	for i := len(s) - 1; i > at; i-- {
+		if s[i] == '%' && escapeEncodesAt(s[i:]) {
+			return i
+		}
+	}
+	return at
+}
+
+// escapeEncodesAt reports whether s begins with a percent-escape that decodes to
+// '@', including through nested encoding of any depth. '@' is 0x40, written "%40";
+// each further encoding layer wraps the leading '%' (0x25) as "%25", so the only
+// strings that decode to a leading '@' are "%40", "%2540", "%252540", and so on: a
+// '%', then zero or more literal "25", then "40". Both bytes have a unique two-hex
+// spelling ("40" and "25" contain no letters, so there is no case variant), so this
+// one forward scan is EXACTLY the layer-by-layer decode, and unlike peeling the
+// escape (which rebuilt the string each round) it allocates nothing and stays linear
+// on a crafted input. That matters because safeHost runs on an attacker-influenced
+// gateway X-Centreon-Host header (issue #62); an allocating peel was quadratic.
+func escapeEncodesAt(s string) bool {
+	if len(s) < 3 || s[0] != '%' {
+		return false
+	}
+	i := 1
+	for i+2 <= len(s) && s[i] == '2' && s[i+1] == '5' {
+		i += 2 // peel one "%25" layer
+	}
+	return i+2 <= len(s) && s[i] == '4' && s[i+1] == '0'
 }
