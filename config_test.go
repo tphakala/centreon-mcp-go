@@ -556,19 +556,18 @@ func namesAnIntendedHost(out string) bool {
 // span of the credential.
 //
 // It is a stronger assertion than TestSafeHostNeverLeaksPassword's marker check, which
-// cannot see a leak of PART of a password, and measurably so: restoring the pre-fix
-// displayHost makes 5,544 of the grid's 5,928 echoed outputs fail here, while not one
-// of them contains passwordMarker, so a marker-only assertion would have stayed green
-// through all of them. What it does not do is reproduce the specific leaks the
+// cannot see a leak of PART of a password: a displayHost with no fail-closed guard
+// echoes many grid rows as an output that names no real host (a username or a password
+// prefix url.Parse mis-read as the host), and many of those carry no passwordMarker, so
+// a marker-only assertion would have stayed green through them. What it does not do is
+// reproduce the specific leaks the
 // hand-written TestDisplayHost rows were written from; those rows are the
 // reproduction, and this is the guard against the next shape.
 func TestDisplayHostNamesOnlyARealHost(t *testing.T) {
-	// Only the raw-'@' grid, not the "%40"/"%2540" joins the safeHost sweep adds.
-	// "%25" is legal in a host, so a double-encoded input like
-	// "https://admin:p@SEKRIT%2540centreon.example.com" parses with host
-	// "SEKRIT%2540centreon.example.com" and displayHost echoes it; that is a
-	// separate, pre-existing displayHost hole tracked outside issue #62, not a
-	// regression this test should assert against.
+	// Only the raw-'@' grid. The "%40"/"%2540" joins the safeHost sweep adds are
+	// covered by TestDisplayHostEncodedJoinsNeverEchoACredential: since the issue #70
+	// fix they fail closed on every row, so they cannot contribute to the echoed>0
+	// availability control this test keeps.
 	grid := credentialHostGrid()
 	if len(grid) < 1000 {
 		t.Fatalf("credentialHostGrid() returned %d hosts, expected a full grid", len(grid))
@@ -595,6 +594,41 @@ func TestDisplayHostNamesOnlyARealHost(t *testing.T) {
 	// vacuously, so require that the grid still exercises the echoing path.
 	if echoed == 0 {
 		t.Error("no grid host was echoed, so the invariant above proved nothing")
+	}
+}
+
+// TestDisplayHostEncodedJoinsNeverEchoACredential drives the encoded-delimiter grids
+// ("%40" and its double-encoded spelling "%2540") through displayHost.
+// TestDisplayHostNamesOnlyARealHost deliberately omits these joins; before the issue
+// #70 fix the "%2540" join echoed a credential fragment in 64 rows, exactly the shapes
+// where the encoded delimiter landed inside the authority url.Parse chose (u.Host) with
+// no '/', '?' or '#' after it, where the old tail-only guard never looked. With the
+// guard fed afterAuthorityDelimiter every row either fails closed or names a real grid
+// host. There is no echoed>0 control here: the encoded joins legitimately fail closed on
+// every row, and the raw-'@' grid in TestDisplayHostNamesOnlyARealHost keeps the
+// availability control.
+func TestDisplayHostEncodedJoinsNeverEchoACredential(t *testing.T) {
+	for _, join := range []string{"%40", "%2540"} {
+		grid := credentialHostGridJoined(join)
+		if len(grid) < 1000 {
+			t.Fatalf("credentialHostGridJoined(%q) returned %d hosts, expected a full grid", join, len(grid))
+		}
+		failures := 0
+		for _, host := range grid {
+			got := displayHost(host)
+			if got == redactedHostPlaceholder {
+				continue
+			}
+			if strings.Contains(got, passwordMarker) || !namesAnIntendedHost(got) {
+				failures++
+				if failures <= 20 {
+					t.Errorf("displayHost(%q) = %q, which names something other than the host", host, got)
+				}
+			}
+		}
+		if failures > 20 {
+			t.Errorf("join %q: displayHost named a non-host in %d of %d grid hosts", join, failures, len(grid))
+		}
 	}
 }
 
@@ -739,6 +773,26 @@ func TestDisplayHost(t *testing.T) {
 		{"fails closed on a double-encoded at sign", "https://admin:1234/secret%2540centreon.example.com", redactedHostPlaceholder},
 		{"fails closed on a triple-encoded at sign", "https://admin:1234/secret%252540centreon.example.com", redactedHostPlaceholder},
 		{"fails closed when the encoding outruns the unescape bound", "https://admin:1234/secret%25252540centreon.example.com", redactedHostPlaceholder},
+		// The encoded delimiter can also sit, still encoded, INSIDE the span url.Parse
+		// accepted as the host, with no '/', '?' or '#' after it (issue #70). authorityTail
+		// is empty for these, so the guard scans afterAuthorityDelimiter's span (which
+		// includes the authority) instead. Before that switch the first row echoed
+		// "https://SEKRIT%40centreon.example.com", the second half of the password
+		// "p@SEKRIT", to the client.
+		{"fails closed on a double-encoded at sign inside the authority", "https://admin:p@SEKRIT%2540centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on a triple-encoded at sign inside the authority", "https://admin:p@SEKRIT%252540centreon.example.com", redactedHostPlaceholder},
+		// The single-encoded spelling never reaches the guard: net/url rejects "%40" as a
+		// host escape, so it fails closed at the parse branch. The #68 shape "%25%34%30"
+		// (the delimiter's own hex digits encoded) is rejected there too, on "%34". Both
+		// pin that the client path is robust to these encodings; #68 is only the safeHost
+		// log path.
+		{"fails closed on a single-encoded at sign inside the authority", "https://admin:p@SEKRIT%40centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on a hex-digit-encoded at sign inside the authority", "https://admin:p@SEKRIT%25%34%30centreon.example.com", redactedHostPlaceholder},
+		// A percent escape in the hostname itself now fails closed too: the guard span
+		// includes the authority, "%25" decodes to a lone '%', and the next unescape
+		// errors, which tailCarriesAtSign refuses. Losing this exotic but legal host
+		// spelling is the accepted over-redaction cost of the #70 fix.
+		{"fails closed on a percent escape in the host itself", "https://cent%25reon.example.com", redactedHostPlaceholder},
 		// A malformed escape cannot be ruled out as a delimiter either. It has to sit in
 		// the QUERY to pin that branch: in a path or fragment url.Parse rejects the URL
 		// itself, so those inputs fail closed one guard earlier and prove nothing here.
