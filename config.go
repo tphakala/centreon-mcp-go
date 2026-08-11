@@ -430,10 +430,14 @@ const redactedHostPlaceholder = "(redacted host)"
 // "https://admin:1234/secret@centreon.example.com" parses with host "admin:1234",
 // where "1234" is the first segment of the password the operator typed, and
 // "https://admin:p@ssword/x@centreon.example.com" parses with host "ssword"
-// (issue #57). The tell in both is a '@' left AFTER the authority, raw or encoded,
-// which tailCarriesAtSign decides. An '@' inside the authority needs no such guard:
-// url.Parse splits at the last one, so the earlier ones belong to the userinfo it
-// decoded (they may land in the username rather than the password).
+// (issue #57). The tell in both is a '@' that survives in the span afterAuthorityDelimiter
+// returns, raw or percent-encoded to any depth, which tailCarriesAtSign decides. That span
+// includes the authority url.Parse chose, not only the path/query/fragment tail: "%25" is
+// a legal host character sequence, so a delimiter encoded twice ("%2540") can survive
+// INSIDE u.Host with no '/', '?' or '#' after it, where a tail-only check never looks
+// (issue #70). A raw '@' inside the authority itself needs no guard: url.Parse splits at
+// the last one, so the earlier ones belong to the userinfo it decoded (they may land in
+// the username rather than the password).
 //
 // Failing closed on that tell also catches a legitimate '@' in a path, query or
 // fragment, which no rule can tell apart from a mis-encoded credential without
@@ -456,7 +460,7 @@ func displayHost(host string) string {
 	if strings.HasPrefix(u.Host, "[") {
 		return u.Scheme + "://" + u.Host
 	}
-	if tailCarriesAtSign(authorityTail(host)) {
+	if tailCarriesAtSign(afterAuthorityDelimiter(host)) {
 		return redactedHostPlaceholder
 	}
 	return u.Scheme + "://" + u.Host

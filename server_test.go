@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -986,4 +987,159 @@ func TestWarnIfAllowlistIneffective(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunHTTP_EnvToolResponseReportsRedactedHost pins the env-auth display sink in
+// runHTTP (envDisplayHost = displayHost(cfg.Host), issue #64): a CENTREON_HOST that
+// embeds user:pass must reach a tool response with all userinfo stripped. It drives the
+// real runHTTP server over the streamable HTTP transport, so it dies both when the call
+// site stops calling displayHost (the raw credential appears in the response) and when
+// displayHost degenerates to the placeholder (the loopback host:port disappears).
+func TestRunHTTP_EnvToolResponseReportsRedactedHost(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	const secret = "sup3r-s3cret-pass"
+
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	hostPort := strings.TrimPrefix(fake.URL, "http://")
+	hostWithCreds := "http://envuser:" + secret + "@" + hostPort
+
+	port := freePort(t)
+	cfg := &Config{
+		Host:      hostWithCreds,
+		Token:     "tok-env", // token auth: no login round-trip, no shutdown logout
+		Transport: transportHTTP,
+		AuthMode:  authModeEnv,
+		HTTPHost:  "127.0.0.1",
+		HTTPPort:  port,
+		AllowHTTP: true, // fake Centreon (httptest) is http loopback
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runHTTP(ctx, cfg, logger, nil) }()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitForHealth(t, base+"/health")
+
+	c := mcp.NewClient(&mcp.Implementation{Name: "issue64-env-test", Version: "0"}, nil)
+	cs, err := c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: base + "/mcp"}, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "centreon_connection_test"})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("connection test reported an error: %s", callToolText(t, res))
+	}
+	text := callToolText(t, res)
+	if want := "http://" + hostPort; !strings.Contains(text, want) {
+		t.Errorf("response should name the env host %q, got: %q", want, text)
+	}
+	if strings.Contains(text, "envuser") {
+		t.Errorf("response leaked the username, got: %q", text)
+	}
+	if strings.Contains(text, secret) {
+		t.Errorf("response leaked the password, got: %q", text)
+	}
+
+	_ = cs.Close()
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("runHTTP did not return within 15s after context cancel")
+	}
+}
+
+// TestRunStdio_ToolResponseReportsRedactedHost pins the stdio display sink in runStdio
+// (buildServer(client, logger, displayHost(cfg.Host)), issue #64). runStdio serves on
+// the process stdio (mcp.StdioTransport), so the test swaps os.Stdin/os.Stdout for pipes
+// and connects an in-process MCP client over them. It must not run in parallel with
+// anything because of that swap.
+func TestRunStdio_ToolResponseReportsRedactedHost(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	const secret = "sup3r-s3cret-pass"
+
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	hostPort := strings.TrimPrefix(fake.URL, "http://")
+	hostWithCreds := "http://stdiouser:" + secret + "@" + hostPort
+
+	cfg := &Config{
+		Host:      hostWithCreds,
+		Token:     "tok-stdio", // token auth: no login/logout round-trips
+		Transport: transportStdio,
+		AllowHTTP: true,
+	}
+
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	origStdin, origStdout := os.Stdin, os.Stdout
+	os.Stdin, os.Stdout = inR, outW
+
+	ctx, cancel := context.WithCancel(t.Context())
+	errCh := make(chan error, 1)
+	go func() { errCh <- runStdio(ctx, cfg, logger, nil) }()
+
+	defer func() {
+		cancel()
+		_ = inW.Close() // EOF on the server's stdin unblocks its read loop
+		select {
+		case <-errCh:
+		case <-time.After(15 * time.Second):
+			t.Error("runStdio did not return within 15s")
+		}
+		os.Stdin, os.Stdout = origStdin, origStdout
+		_ = inR.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	}()
+
+	c := mcp.NewClient(&mcp.Implementation{Name: "issue64-stdio-test", Version: "0"}, nil)
+	cs, err := c.Connect(ctx, &mcp.IOTransport{Reader: outR, Writer: inW}, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "centreon_connection_test"})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("connection test reported an error: %s", callToolText(t, res))
+	}
+	text := callToolText(t, res)
+	if want := "http://" + hostPort; !strings.Contains(text, want) {
+		t.Errorf("response should name the configured host %q, got: %q", want, text)
+	}
+	if strings.Contains(text, "stdiouser") {
+		t.Errorf("response leaked the username, got: %q", text)
+	}
+	if strings.Contains(text, secret) {
+		t.Errorf("response leaked the password, got: %q", text)
+	}
+	_ = cs.Close()
 }
