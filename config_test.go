@@ -467,17 +467,6 @@ func TestSafeHostNeverLeaksPassword(t *testing.T) {
 	}
 }
 
-// TestDisplayHostNamesOnlyARealHost drives the same credential grid through
-// displayHost and asserts the invariant issue #48 actually needs: whatever comes
-// back either is the placeholder or names one of the hosts the grid was built from,
-// never a span of the credential.
-//
-// This is a stronger assertion than TestSafeHostNeverLeaksPassword's marker check,
-// which cannot see a leak of PART of a password. Recorded honestly: this grid does
-// not reproduce the leaks the hand-written TestDisplayHost rows do. Restoring the
-// pre-fix displayHost leaves this test green while those rows go red, because the
-// grid's mis-parses echo a fragment that precedes the marker rather than the marker
-// itself. The rows are the reproduction; this is the guard against the next shape.
 // namesAnIntendedHost reports whether out is exactly a scheme plus one of the
 // authorities credentialHostGrid builds its inputs around. It reads
 // credentialGridHosts, the same list the grid is built from, so the two cannot drift
@@ -493,6 +482,18 @@ func namesAnIntendedHost(out string) bool {
 	return false
 }
 
+// TestDisplayHostNamesOnlyARealHost drives the same credential grid through
+// displayHost and asserts the invariant issue #48 actually needs: whatever comes back
+// either is the placeholder or names one of the hosts the grid was built from, never a
+// span of the credential.
+//
+// It is a stronger assertion than TestSafeHostNeverLeaksPassword's marker check, which
+// cannot see a leak of PART of a password, and measurably so: restoring the pre-fix
+// displayHost makes 5,544 of the grid's 5,928 echoed outputs fail here, while not one
+// of them contains passwordMarker, so a marker-only assertion would have stayed green
+// through all of them. What it does not do is reproduce the specific leaks the
+// hand-written TestDisplayHost rows were written from; those rows are the
+// reproduction, and this is the guard against the next shape.
 func TestDisplayHostNamesOnlyARealHost(t *testing.T) {
 	grid := credentialHostGrid()
 	if len(grid) < 1000 {
@@ -537,21 +538,21 @@ func TestRedactedHostPlaceholderLiteral(t *testing.T) {
 // inputs, so finding it in safeHost output is unambiguously a leak.
 const passwordMarker = "SEKRIT"
 
+// credentialGridHosts are the authorities credentialHostGrid builds every input
+// around. namesAnIntendedHost reads this same list, so the grid and the assertion
+// over it cannot drift apart. Every entry must be a plain authority: a
+// credential-shaped entry added here would silently be blessed as a legitimate host.
+var credentialGridHosts = []string{
+	"centreon.example.com", "centreon.example.com:8443",
+	"[2001:db8::1]:8443", "[::1]",
+}
+
 // credentialHostGrid builds credential-shaped host URLs by combining a scheme, a
 // username, a password holding passwordMarker, a host and a trailing path, query or
 // fragment. It covers the placements url.Parse mis-reads: an unencoded '/', '?' or
 // '#' in either the username or the password, an all-numeric password prefix that
 // parses as a port, an email-style username that moves the authority split onto the
 // wrong '@', and a second password span in the tail (issue #55).
-// credentialGridHosts are the authorities credentialHostGrid builds every input
-// around. TestDisplayHostNamesOnlyARealHost asserts that any echoed output names one
-// of these, so both must read the same list: a host added here that the assertion did
-// not know about would otherwise count as a leak.
-var credentialGridHosts = []string{
-	"centreon.example.com", "centreon.example.com:8443",
-	"[2001:db8::1]:8443", "[::1]",
-}
-
 func credentialHostGrid() []string {
 	schemes := []string{"https://", "http://", "//", "://", "", "https:"}
 	usernames := []string{

@@ -404,12 +404,14 @@ const redactedHostPlaceholder = "(redacted host)"
 // resolving names. displayHost discards all three regardless, so only the host name
 // is lost. A bracketed authority is exempt: url.Parse requires the address part of
 // its body to parse as an IP literal, so it is the host and not a mis-read
-// credential. Only the part before an RFC 6874 "%25" zone marker is validated, so
-// zone text is echoed as written.
+// credential: url.Parse rejects a '[' anywhere but the start, requires the address
+// to parse, and validates an RFC 6874 "%25" zone too, refusing an empty one or an
+// escaped byte inside it. Note the echoed zone has its "%25" decoded to a bare '%',
+// so an output naming a zone is not itself a reparseable URL.
 //
-// A URL with no scheme also fails closed, so the result is always well formed rather
-// than a bare "://host". validateHostScheme rejects a missing scheme before any
-// display-path caller is reached, so this only matters to a direct caller.
+// A URL with no scheme also fails closed, so the result is never a bare "://host".
+// validateHostScheme rejects a missing scheme before any display-path caller is
+// reached, so this only matters to a direct caller.
 func displayHost(host string) string {
 	u, err := url.Parse(host)
 	if err != nil || u.Scheme == "" || u.Hostname() == "" {
@@ -432,12 +434,17 @@ func displayHost(host string) string {
 // substring test for "%40" is not enough: the tail is unescaped repeatedly until no
 // escape is left. Every exit other than "no '@' and nothing left to unescape" fails
 // closed, because a tail that will not resolve cannot be ruled out as an encoded
-// delimiter: that covers a malformed escape such as "%4%30" and a tail still escaped
-// when the bound runs out.
+// delimiter. Three things reach that verdict: a malformed escape such as "%4%30", a
+// tail still escaped when the bound runs out, and a legitimate encoded percent sign,
+// since unescaping "%25" yields a bare '%' that the next pass cannot resolve. The
+// last of those is the only one an operator is likely to meet, in a path or query
+// such as "/100%25". The fixed-point exit is defensive only: a successful unescape of
+// a string containing '%' always shortens it.
 //
-// Unescaping rather than scanning for '%' is what keeps an ordinary encoded path
-// such as "/mon%20test" from failing closed. Note "%4c" is a valid escape for 'L',
-// so a tail like "/pw%4chost" holds no delimiter in any encoding and is trusted.
+// Unescaping rather than scanning for '%' is what keeps an ordinary encoded path such
+// as "/mon%20test" trusted, along with "%2F", "%3D" and a UTF-8 escape like "%C3%A9".
+// Note "%4c" is a valid escape for 'L', so a tail like "/pw%4chost" holds no
+// delimiter in any encoding and is trusted too.
 func tailCarriesAtSign(tail string) bool {
 	for range 4 {
 		if strings.ContainsRune(tail, '@') {
