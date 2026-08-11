@@ -394,28 +394,65 @@ const redactedHostPlaceholder = "(redacted host)"
 // "https://admin:1234/secret@centreon.example.com" parses with host "admin:1234",
 // where "1234" is the first segment of the password the operator typed, and
 // "https://admin:p@ssword/x@centreon.example.com" parses with host "ssword"
-// (issue #57). The tell in both is a '@' left AFTER the authority, so displayHost
-// fails closed on one, written raw or as %40. An '@' inside the authority needs no
-// such guard: url.Parse splits at the last one, so the earlier ones belong to the
-// password it decoded.
+// (issue #57). The tell in both is a '@' left AFTER the authority, raw or encoded,
+// which tailCarriesAtSign decides. An '@' inside the authority needs no such guard:
+// url.Parse splits at the last one, so the earlier ones belong to the userinfo it
+// decoded (they may land in the username rather than the password).
 //
-// Failing closed on that tell also catches a legitimate '@' in a path or query,
-// which no rule can tell apart from a mis-encoded credential without resolving
-// names. displayHost discards the path and query regardless, so only the host name
-// is lost. A bracketed authority is exempt: url.Parse requires its body to parse as
-// an IP literal, so it is the host and not a mis-read credential.
+// Failing closed on that tell also catches a legitimate '@' in a path, query or
+// fragment, which no rule can tell apart from a mis-encoded credential without
+// resolving names. displayHost discards all three regardless, so only the host name
+// is lost. A bracketed authority is exempt: url.Parse requires the address part of
+// its body to parse as an IP literal, so it is the host and not a mis-read
+// credential. Only the part before an RFC 6874 "%25" zone marker is validated, so
+// zone text is echoed as written.
+//
+// A URL with no scheme also fails closed, so the result is always well formed rather
+// than a bare "://host". validateHostScheme rejects a missing scheme before any
+// display-path caller is reached, so this only matters to a direct caller.
 func displayHost(host string) string {
 	u, err := url.Parse(host)
-	if err != nil || u.Hostname() == "" {
+	if err != nil || u.Scheme == "" || u.Hostname() == "" {
 		return redactedHostPlaceholder
 	}
 	if strings.HasPrefix(u.Host, "[") {
 		return u.Scheme + "://" + u.Host
 	}
-	if tail := authorityTail(host); strings.ContainsRune(tail, '@') || strings.Contains(tail, "%40") {
+	if tailCarriesAtSign(authorityTail(host)) {
 		return redactedHostPlaceholder
 	}
 	return u.Scheme + "://" + u.Host
+}
+
+// tailCarriesAtSign reports whether what follows an authority still holds a '@',
+// the tell that url.Parse may have ended the authority inside a credential rather
+// than at its delimiter.
+//
+// The '@' can arrive percent-encoded, and encoded more than once ("%2540"), so a
+// substring test for "%40" is not enough: the tail is unescaped repeatedly until no
+// escape is left. Every exit other than "no '@' and nothing left to unescape" fails
+// closed, because a tail that will not resolve cannot be ruled out as an encoded
+// delimiter: that covers a malformed escape such as "%4%30" and a tail still escaped
+// when the bound runs out.
+//
+// Unescaping rather than scanning for '%' is what keeps an ordinary encoded path
+// such as "/mon%20test" from failing closed. Note "%4c" is a valid escape for 'L',
+// so a tail like "/pw%4chost" holds no delimiter in any encoding and is trusted.
+func tailCarriesAtSign(tail string) bool {
+	for range 4 {
+		if strings.ContainsRune(tail, '@') {
+			return true
+		}
+		if !strings.ContainsRune(tail, '%') {
+			return false
+		}
+		next, err := url.PathUnescape(tail)
+		if err != nil || next == tail {
+			return true
+		}
+		tail = next
+	}
+	return true
 }
 
 // maskAuthorityPassword is the textual fail-closed fallback for host strings whose
