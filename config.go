@@ -206,6 +206,12 @@ func gatewayMode(cfg *Config) bool {
 // operator opts in via CENTREON_ALLOW_HTTP. A missing or non-http(s) scheme, or an
 // unparseable URL, is rejected outright (fail closed). url.Parse normalises the
 // scheme to lowercase, so the cases below are matched in lowercase.
+//
+// It also rejects an http(s) URL that parses but carries no hostname, which no
+// caller can dial (issue #58). A raw '@' after the authority is NOT rejected:
+// that shape is indistinguishable from a mis-encoded credential, so redaction in
+// the log and the fail-closed placeholder in displayHost are the controls there,
+// not validation (issue #55).
 func validateHostScheme(host string, allowHTTP bool) error {
 	u, err := url.Parse(host)
 	if err != nil {
@@ -219,13 +225,21 @@ func validateHostScheme(host string, allowHTTP bool) error {
 		return fmt.Errorf("invalid host url %q: %w", safeHost(host), reason)
 	}
 	switch u.Scheme {
-	case schemeHTTPS:
-		return nil
-	case schemeHTTP:
-		if allowHTTP {
-			return nil
+	case schemeHTTPS, schemeHTTP:
+		// A parse can succeed while leaving no hostname to dial: "https:" and
+		// "https:centreon.example.com" put everything in Opaque, "https://" has an
+		// empty authority, and "https://admin:pass@" or "https://:8443" fill only
+		// the userinfo or the port. Reject those here instead of letting
+		// centreon.NewClient reject them, because its error formats the raw base
+		// URL and that error is logged, which would put an embedded password in the
+		// log in clear (issue #58, CWE-532).
+		if u.Hostname() == "" {
+			return fmt.Errorf("host %q must include a hostname (https://host.example[:port])", safeHost(host))
 		}
-		return fmt.Errorf("host %q uses http, which sends credentials in cleartext (CWE-319): use https or set CENTREON_ALLOW_HTTP=true", safeHost(host))
+		if u.Scheme == schemeHTTP && !allowHTTP {
+			return fmt.Errorf("host %q uses http, which sends credentials in cleartext (CWE-319): use https or set CENTREON_ALLOW_HTTP=true", safeHost(host))
+		}
+		return nil
 	case "":
 		return fmt.Errorf("host %q must include a scheme (https://...)", safeHost(host))
 	default:

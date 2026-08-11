@@ -275,6 +275,17 @@ func TestValidateHostScheme(t *testing.T) {
 		{"accepts a credential-free host with @ in the path", "https://centreon.example.com:8080/a@b", false, "", ""},
 		{"accepts an @ in the path with no colon", "https://centreon.example.com/api@v1", false, "", ""},
 		{"accepts a mis-encoded credential, redaction is the control", "https://admin:1234/secret@centreon.example.com", false, "", ""},
+		// A URL with no hostname cannot be used at all, so validation refuses it
+		// rather than leaving it to the client (issue #58). centreon.NewClient
+		// rejects it with an error that formats the RAW base URL, and that error is
+		// logged, so a credential-bearing form would otherwise reach the log in
+		// clear (CWE-532). notWant pins that the rejection here stays redacted.
+		{"scheme-only rejected", "https:", true, "must include a hostname", ""},
+		{"empty authority rejected", "https://", true, "must include a hostname", ""},
+		{"opaque form rejected", "https:centreon.example.com", true, "must include a hostname", ""},
+		{"port-only authority rejected", "https://:9443", false, "must include a hostname", ""},
+		{"userinfo-only authority rejected with password redacted", "https://admin:sekrit58@", false, "must include a hostname", "sekrit58"},
+		{"userinfo with port-only authority rejected with password redacted", "https://admin:sekrit58@:9443", false, "must include a hostname", "sekrit58"},
 	}
 
 	for _, tt := range tests {
