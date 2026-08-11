@@ -239,9 +239,10 @@ func TestLoadConfig_HTTPPort(t *testing.T) {
 	}
 }
 
-// TestValidateHostScheme pins the cleartext-credential guard (CWE-319): https is
-// always accepted, http only with the opt-in, and a missing or unsupported
-// scheme (or an unparseable URL) is rejected outright.
+// TestValidateHostScheme pins the cleartext-credential guard (CWE-319) and the
+// hostname requirement: https is accepted when it names a host, http only with the
+// opt-in, and a missing or unsupported scheme, an unparseable URL, or a URL naming
+// no hostname is rejected outright.
 func TestValidateHostScheme(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -275,6 +276,27 @@ func TestValidateHostScheme(t *testing.T) {
 		{"accepts a credential-free host with @ in the path", "https://centreon.example.com:8080/a@b", false, "", ""},
 		{"accepts an @ in the path with no colon", "https://centreon.example.com/api@v1", false, "", ""},
 		{"accepts a mis-encoded credential, redaction is the control", "https://admin:1234/secret@centreon.example.com", false, "", ""},
+		// A URL naming no hostname is refused here rather than left to the client
+		// (issue #58). For the empty-Host shapes centreon.NewClient rejects it itself,
+		// with an error that formats the RAW base URL, and that error is logged, so a
+		// credential-bearing form would otherwise reach the log in clear (CWE-532).
+		// The port-only shapes are different: the client accepts them, so they are
+		// rejected as a configuration error, not a leak. notWant pins that the
+		// rejection message here stays redacted.
+		{"scheme-only rejected", "https:", false, "must include a hostname", ""},
+		// With the opt-in set too, so the cleartext flag cannot rescue a hostless https URL.
+		{"empty authority rejected even with the http opt-in", "https://", true, "must include a hostname", ""},
+		{"opaque form rejected", "https:centreon.example.com", false, "must include a hostname", ""},
+		{"port-only authority rejected", "https://:9443", false, "must include a hostname", ""},
+		{"userinfo-only authority rejected with password redacted", "https://admin:sekrit58@", false, "must include a hostname", "sekrit58"},
+		{"userinfo with port-only authority rejected with password redacted", "https://admin:sekrit58@:9443", false, "must include a hostname", "sekrit58"},
+		// The hostname check runs BEFORE the cleartext-http check inside the shared
+		// http(s) arm, so a hostless http URL is reported as hostless whatever
+		// CENTREON_ALLOW_HTTP says. Without these rows the two guards never co-occur,
+		// and swapping their order leaves the suite green.
+		{"hostless http rejected on the hostname, not the scheme", "http://", false, "must include a hostname", ""},
+		{"hostless http rejected as hostless even with the opt-in", "http://:8080", true, "must include a hostname", ""},
+		{"hostless http keeps the password out of the message", "http://admin:sekrit58@", false, "must include a hostname", "sekrit58"},
 	}
 
 	for _, tt := range tests {
@@ -445,9 +467,85 @@ func TestSafeHostNeverLeaksPassword(t *testing.T) {
 	}
 }
 
+// namesAnIntendedHost reports whether out is exactly a scheme plus one of the
+// authorities credentialHostGrid builds its inputs around. It reads
+// credentialGridHosts, the same list the grid is built from, so the two cannot drift
+// apart, and it requires the scheme so that a bare "://host" does not pass.
+func namesAnIntendedHost(out string) bool {
+	for _, host := range credentialGridHosts {
+		for _, scheme := range []string{"https", "http"} {
+			if out == scheme+"://"+host {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestDisplayHostNamesOnlyARealHost drives the same credential grid through
+// displayHost and asserts the invariant issue #48 actually needs: whatever comes back
+// either is the placeholder or names one of the hosts the grid was built from, never a
+// span of the credential.
+//
+// It is a stronger assertion than TestSafeHostNeverLeaksPassword's marker check, which
+// cannot see a leak of PART of a password, and measurably so: restoring the pre-fix
+// displayHost makes 5,544 of the grid's 5,928 echoed outputs fail here, while not one
+// of them contains passwordMarker, so a marker-only assertion would have stayed green
+// through all of them. What it does not do is reproduce the specific leaks the
+// hand-written TestDisplayHost rows were written from; those rows are the
+// reproduction, and this is the guard against the next shape.
+func TestDisplayHostNamesOnlyARealHost(t *testing.T) {
+	grid := credentialHostGrid()
+	if len(grid) < 1000 {
+		t.Fatalf("credentialHostGrid() returned %d hosts, expected a full grid", len(grid))
+	}
+
+	failures, echoed := 0, 0
+	for _, host := range grid {
+		got := displayHost(host)
+		if got == redactedHostPlaceholder {
+			continue
+		}
+		echoed++
+		if strings.Contains(got, passwordMarker) || !namesAnIntendedHost(got) {
+			failures++
+			if failures <= 20 {
+				t.Errorf("displayHost(%q) = %q, which names something other than the host", host, got)
+			}
+		}
+	}
+	if failures > 20 {
+		t.Errorf("displayHost named a non-host in %d of %d grid hosts", failures, len(grid))
+	}
+	// Positive control. Every row failing closed would satisfy the assertion above
+	// vacuously, so require that the grid still exercises the echoing path.
+	if echoed == 0 {
+		t.Error("no grid host was echoed, so the invariant above proved nothing")
+	}
+}
+
+// TestRedactedHostPlaceholderLiteral pins the sentinel's literal value. Every other
+// assertion writes it as the constant, so the client-facing string could otherwise be
+// changed to anything, including something that reads as a host or a credential, with
+// the whole suite still green.
+func TestRedactedHostPlaceholderLiteral(t *testing.T) {
+	if redactedHostPlaceholder != "(redacted host)" {
+		t.Errorf("redactedHostPlaceholder = %q, want %q", redactedHostPlaceholder, "(redacted host)")
+	}
+}
+
 // passwordMarker appears only in password position in the credentialHostGrid
 // inputs, so finding it in safeHost output is unambiguously a leak.
 const passwordMarker = "SEKRIT"
+
+// credentialGridHosts are the authorities credentialHostGrid builds every input
+// around. namesAnIntendedHost reads this same list, so the grid and the assertion
+// over it cannot drift apart. Every entry must be a plain authority: a
+// credential-shaped entry added here would silently be blessed as a legitimate host.
+var credentialGridHosts = []string{
+	"centreon.example.com", "centreon.example.com:8443",
+	"[2001:db8::1]:8443", "[::1]",
+}
 
 // credentialHostGrid builds credential-shaped host URLs by combining a scheme, a
 // username, a password holding passwordMarker, a host and a trailing path, query or
@@ -473,10 +571,7 @@ func credentialHostGrid() []string {
 		"1234/sec:" + passwordMarker, "pw/" + passwordMarker, "p@" + passwordMarker,
 		"pw//" + passwordMarker, "pw://" + passwordMarker, "aB9//" + passwordMarker,
 	}
-	hosts := []string{
-		"centreon.example.com", "centreon.example.com:8443",
-		"[2001:db8::1]:8443", "[::1]",
-	}
+	hosts := credentialGridHosts
 	tails := []string{"", "/mon", "?q=1", "#f", "/a@b", "/d:" + passwordMarker + "@f"}
 
 	userinfos := make([]string, 0, len(usernames)*len(passwords))
@@ -504,10 +599,12 @@ func credentialHostGrid() []string {
 	return grid
 }
 
-// TestDisplayHost pins that displayHost reduces a host URL to scheme://host[:port]
-// for a tool response, stripping the username as well as the password (issue #48
-// requires no username/password/token in the response), unlike safeHost which
-// keeps the username for log greps.
+// TestDisplayHost pins two contracts. First, displayHost reduces a host URL to
+// scheme://host[:port] for a tool response, stripping the username as well as the
+// password (issue #48 requires no username/password/token in the response), unlike
+// safeHost which keeps the username for log greps. Second, it fails closed when a
+// '@' survives after the authority, because url.Parse may then have read part of a
+// credential as the host (issue #57).
 func TestDisplayHost(t *testing.T) {
 	tests := []struct {
 		name string
@@ -521,12 +618,75 @@ func TestDisplayHost(t *testing.T) {
 		{"strips path and query", "https://centreon.example.com:8443/mon?q=1", "https://centreon.example.com:8443"},
 		{"strips userinfo with port and path", "https://admin:sekret@centreon.example.com:8443/mon", "https://centreon.example.com:8443"},
 		{"leaves plain host unchanged", "https://centreon.example.com", "https://centreon.example.com"},
-		// The numeric-prefix userinfo form (issue #55) is mis-parsed by url.Parse as
-		// host:port; displayHost still does not leak the "secret" password span, and
-		// this malformed form is not reachable through the success-gated tool sink.
-		{"does not leak password on the numeric-prefix form", "https://admin:1234/secret@centreon.example.com", "https://admin:1234"},
+		// A '@' surviving after the authority means url.Parse may have read part of a
+		// credential as the host, so echoing it can hand a fragment of the operator's
+		// password to a client (issue #57). Against origin/main, where displayHost had
+		// no guard at all, the first three rows echoed "https://admin:1234",
+		// "https://us" and "https://corp.example:1234"; the fourth and fifth survived
+		// the first attempt at the guard and echoed "https://ssword" and
+		// "https://mysecret".
+		{"fails closed on the numeric-prefix credential form", "https://admin:1234/secret@centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on the short-username credential form", "https://us/er:secret@centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on the multi-at credential form", "https://user@corp.example:1234/Sekr1tPass@10.0.0.5", redactedHostPlaceholder},
+		// A password holding a '@' before a '/' is the shape that survived the first
+		// attempt at this fix: url.Parse decodes userinfo "admin:p" and host "ssword",
+		// so a predicate that trusted any decoded password echoed the second half of
+		// the real one.
+		{"fails closed when the password holds an at sign before a slash", "https://admin:p@ssword/x@centreon.example.com", redactedHostPlaceholder},
+		// A colon-free credential is the same hazard with no password span to find.
+		// url.Parse reads "mysecret" as the host; safeHost leaves this input unchanged
+		// because maskAuthorityPassword finds no ':' in the "mysecret/password" span,
+		// so a predicate keyed on safeHost's output echoed the host as well.
+		{"fails closed on a colon-free credential mis-read as the host", "https://mysecret/password@centreon.example.com", redactedHostPlaceholder},
+		// The delimiter can also arrive percent-encoded, which a raw-'@' test misses
+		// while url.Parse still ends the authority at the '/', '?' or '#'. All three
+		// delimiters the doc comment names are covered.
+		{"fails closed on an encoded at sign after a slash", "https://admin:1234/secret%40centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on an encoded at sign after a question mark", "https://admin:1234?secret%40centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on an encoded at sign after a hash", "https://admin:1234#secret%40centreon.example.com", redactedHostPlaceholder},
+		// Encoded more than once, so a substring test for "%40" does not see it. The
+		// third row needs more unescape passes than the guard performs, and fails closed
+		// because the tail was still escaped when the bound ran out.
+		{"fails closed on a double-encoded at sign", "https://admin:1234/secret%2540centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on a triple-encoded at sign", "https://admin:1234/secret%252540centreon.example.com", redactedHostPlaceholder},
+		{"fails closed when the encoding outruns the unescape bound", "https://admin:1234/secret%25252540centreon.example.com", redactedHostPlaceholder},
+		// A malformed escape cannot be ruled out as a delimiter either. It has to sit in
+		// the QUERY to pin that branch: in a path or fragment url.Parse rejects the URL
+		// itself, so those inputs fail closed one guard earlier and prove nothing here.
+		{"fails closed on a malformed escape in the query", "https://admin:1234?secret%4%30centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on a doubled percent in the query", "https://admin:1234?secret%%3440centreon.example.com", redactedHostPlaceholder},
+		// No rule can tell scheme://X/Y@Z apart from userinfo X/Y plus host Z without
+		// resolving names, so a legitimate '@' after the authority fails closed too.
+		// displayHost discards the path, query and fragment anyway, so only the host
+		// name is lost.
+		{"fails closed on an at sign in the path", "https://centreon.example.com/api@v1", redactedHostPlaceholder},
+		{"fails closed on an at sign in the query", "https://centreon.example.com?q=a@b", redactedHostPlaceholder},
+		{"fails closed on an at sign in the fragment", "https://centreon.example.com#a@b", redactedHostPlaceholder},
+		{"fails closed on an at sign in the path of a host with a port", "https://centreon.example.com:8080/a@b", redactedHostPlaceholder},
+		// An unparseable URL fails closed on the error, not on the hostname. Without a
+		// row here that half of the guard is unpinned, since every other input parses.
+		{"fails closed on an unparseable url", "https://admin:se^kret@centreon.example.com", redactedHostPlaceholder},
+		{"fails closed on a url with a space", "https://admin:se kret@centreon.example.com", redactedHostPlaceholder},
+		// Unescaping the tail rather than scanning it for '%' is what keeps an ordinary
+		// encoded path trusted. "%4c" is a valid escape for 'L', so the second row
+		// holds no delimiter in any encoding.
+		{"keeps a host whose path holds an ordinary escape", "https://centreon.example.com/mon%20test", "https://centreon.example.com"},
+		{"keeps a host whose path escape is not a delimiter", "https://centreon.example.com/pw%4chost", "https://centreon.example.com"},
+		// url.Parse requires the address part of a bracketed body to parse as an IP
+		// literal, so such an authority is the host and not a mis-read credential. It
+		// therefore stays trusted even when a '@' survives after it, which the second
+		// row pins.
+		{"keeps a bracketed ipv6 host", "https://[::1]:8443", "https://[::1]:8443"},
+		{"keeps a bracketed ipv6 host despite an at sign in the path", "https://[::1]:8443/path@x", "https://[::1]:8443"},
+		// An '@' INSIDE the authority needs no guard: url.Parse splits at the last one,
+		// so the earlier ones belong to the userinfo it decoded and the host is sound.
+		// These pin the availability half, which a rule counting every '@' would break.
+		{"keeps a host whose password holds an at sign", "https://admin:p@ssword@centreon.example.com", "https://centreon.example.com"},
+		{"keeps a host whose password holds an at sign, with a path", "https://admin:p@ssword@centreon.example.com/centreon", "https://centreon.example.com"},
+		{"keeps a host whose password is empty", "https://user:@centreon.example.com", "https://centreon.example.com"},
+		{"keeps a host whose password is percent-encoded", "https://user:p%40ss@centreon.example.com", "https://centreon.example.com"},
 		{"fails closed on empty", "", redactedHostPlaceholder},
-		{"fails closed on a hostless authority", "https://:8443", redactedHostPlaceholder},
+		{"fails closed on an authority holding only a port", "https://:8443", redactedHostPlaceholder},
 	}
 
 	for _, tt := range tests {
@@ -538,10 +698,14 @@ func TestDisplayHost(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_HostScheme pins that CENTREON_HOST is scheme-checked at load,
-// gated by CENTREON_ALLOW_HTTP, and skipped only in HTTP gateway mode where the
-// host is an unused placeholder. It also pins that stdio+gateway still validates,
-// so the skip requires BOTH the http transport and gateway auth mode.
+// TestLoadConfig_HostScheme pins that CENTREON_HOST is validated at load, for both
+// its scheme (gated by CENTREON_ALLOW_HTTP) and the presence of a hostname, and
+// that the check is skipped only in HTTP gateway mode where the host is an unused
+// placeholder. It also pins that stdio+gateway still validates, so the skip requires
+// BOTH the http transport and gateway auth mode. The hostname rows are here to pin
+// the wiring rather than the predicate, which TestValidateHostScheme already covers:
+// they fail if this call site stops validating CENTREON_HOST, and the gateway row
+// fails if the skip stops covering the hostname check as well as the scheme.
 func TestLoadConfig_HostScheme(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -559,6 +723,10 @@ func TestLoadConfig_HostScheme(t *testing.T) {
 		{"gateway mode skips http host check", "http://placeholder.example.com", "http", "gateway", "", "", false},
 		{"http transport env auth still validates http host", "http://h.example.com", "http", "env", "", "CENTREON_HOST", false},
 		{"stdio with gateway auth still validates http host", "http://h.example.com", "stdio", "gateway", "", "CENTREON_HOST", false},
+		{"hostless host rejected", "https://", "", "", "", "CENTREON_HOST", false},
+		{"port-only host rejected", "https://:8443", "", "", "", "CENTREON_HOST", false},
+		{"credential-only host rejected", "https://admin:sekrit58@", "", "", "", "CENTREON_HOST", false},
+		{"gateway mode skips the hostname check too", "https://", "http", "gateway", "", "", false},
 	}
 
 	for _, tt := range tests {
@@ -590,8 +758,10 @@ func TestLoadConfig_HostScheme(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_AllowedHostsScheme pins that each CENTREON_ALLOWED_HOSTS entry
-// is scheme-checked at load, gated by CENTREON_ALLOW_HTTP.
+// TestLoadConfig_AllowedHostsScheme pins that each CENTREON_ALLOWED_HOSTS entry is
+// validated at load, for its scheme (gated by CENTREON_ALLOW_HTTP) and for naming a
+// hostname. Note this runs in every mode, so a hostless entry aborts startup even
+// where the allowlist itself is never consulted.
 func TestLoadConfig_AllowedHostsScheme(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -603,6 +773,8 @@ func TestLoadConfig_AllowedHostsScheme(t *testing.T) {
 		{"http entry rejected by default", "https://a.example.com,http://b.example.com", "", "CENTREON_ALLOWED_HOSTS"},
 		{"http entry accepted with opt-in", "https://a.example.com,http://b.example.com", "true", ""},
 		{"scheme-less entry rejected", "a.example.com", "", "CENTREON_ALLOWED_HOSTS"},
+		{"hostless entry rejected", "https://a.example.com,https://", "", "CENTREON_ALLOWED_HOSTS"},
+		{"port-only entry rejected", "https://:8443", "", "CENTREON_ALLOWED_HOSTS"},
 	}
 
 	for _, tt := range tests {

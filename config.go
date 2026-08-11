@@ -98,10 +98,11 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 
-	// Reject a cleartext http:// CENTREON_HOST (CWE-319) unless the operator opts
-	// in. In HTTP gateway mode CENTREON_HOST is an unused placeholder and the real
-	// hosts arrive per request via X-Centreon-Host, so its scheme is not validated
-	// here (gatewayServer validates each header value instead).
+	// Reject a CENTREON_HOST that names no hostname, or that is cleartext http://
+	// without the operator's opt-in (CWE-319). In HTTP gateway mode CENTREON_HOST is
+	// an unused placeholder and the real hosts arrive per request via
+	// X-Centreon-Host, so it is not validated here at all (gatewayServer validates
+	// each header value instead).
 	if !gatewayMode(&cfg) {
 		if err := validateHostScheme(cfg.Host, cfg.AllowHTTP); err != nil {
 			return Config{}, fmt.Errorf("CENTREON_HOST: %w", err)
@@ -202,10 +203,16 @@ func gatewayMode(cfg *Config) bool {
 // validateHostScheme rejects a Centreon host URL whose scheme would send
 // credentials in cleartext. Credentials (username/password, or the X-AUTH-TOKEN
 // header once authenticated) ride every request to the host, so an http:// target
-// exposes them on the wire (CWE-319). https is always accepted; http only when the
-// operator opts in via CENTREON_ALLOW_HTTP. A missing or non-http(s) scheme, or an
-// unparseable URL, is rejected outright (fail closed). url.Parse normalises the
-// scheme to lowercase, so the cases below are matched in lowercase.
+// exposes them on the wire (CWE-319). https is accepted when it names a host; http
+// only when the operator opts in via CENTREON_ALLOW_HTTP. A missing or non-http(s)
+// scheme, or an unparseable URL, is rejected outright (fail closed). url.Parse
+// normalises the scheme to lowercase, so the cases below are matched in lowercase.
+//
+// It also rejects an http(s) URL that parses but names no hostname (issue #58). A
+// raw '@' after the authority is NOT rejected:
+// that shape is indistinguishable from a mis-encoded credential, so redaction in
+// the log and the fail-closed placeholder in displayHost are the controls there,
+// not validation (issue #55).
 func validateHostScheme(host string, allowHTTP bool) error {
 	u, err := url.Parse(host)
 	if err != nil {
@@ -219,13 +226,27 @@ func validateHostScheme(host string, allowHTTP bool) error {
 		return fmt.Errorf("invalid host url %q: %w", safeHost(host), reason)
 	}
 	switch u.Scheme {
-	case schemeHTTPS:
-		return nil
-	case schemeHTTP:
-		if allowHTTP {
-			return nil
+	case schemeHTTPS, schemeHTTP:
+		// A parse can succeed while naming no hostname, in two groups that are
+		// rejected for different reasons (issue #58).
+		//
+		// Host is empty: "https:" and "https:centreon.example.com" leave everything
+		// in Opaque, "https://" has an empty authority, and "https://admin:pass@"
+		// fills only the userinfo. centreon.NewClient rejects these itself, with an
+		// error that formats the RAW base URL, and that error is logged, so an
+		// embedded password would reach the log in clear (CWE-532).
+		//
+		// Host is non-empty but holds only a port, as in "https://:8443". The client
+		// accepts this one and Go's dialer would treat it as localhost, so it is
+		// rejected as a configuration error rather than a leak: a base URL that names
+		// no host is a typo, and https cannot verify a certificate without a name.
+		if u.Hostname() == "" {
+			return fmt.Errorf("host %q must include a hostname (https://host.example[:port])", safeHost(host))
 		}
-		return fmt.Errorf("host %q uses http, which sends credentials in cleartext (CWE-319): use https or set CENTREON_ALLOW_HTTP=true", safeHost(host))
+		if u.Scheme == schemeHTTP && !allowHTTP {
+			return fmt.Errorf("host %q uses http, which sends credentials in cleartext (CWE-319): use https or set CENTREON_ALLOW_HTTP=true", safeHost(host))
+		}
+		return nil
 	case "":
 		return fmt.Errorf("host %q must include a scheme (https://...)", safeHost(host))
 	default:
@@ -358,23 +379,87 @@ func tailCarriesPassword(host string) bool {
 	return at >= 0 && strings.IndexByte(tail[:at], ':') >= 0
 }
 
-// displayHost reduces a host URL to scheme://host[:port] for display in a tool
-// response, stripping ALL userinfo (username and password) plus any path, query
-// and fragment, so no credential embedded in the URL reaches a client. This is
-// stricter than safeHost, which keeps the username for log greps: issue #48
-// requires the response to expose no username, password or token. Every
-// display-path caller first runs the host through validateHostScheme, which
-// guarantees a parseable http/https URL, so the fail-closed placeholder is a
-// defensive fallback that never fires for a validated host.
-// redactedHostPlaceholder is the fail-closed display value for a host that has no
-// usable hostname, so a malformed or hostless input is never echoed verbatim.
+// redactedHostPlaceholder is the fail-closed display value for a host whose
+// authority cannot be trusted, so a malformed, hostless or mis-parsed input is
+// never echoed verbatim.
 const redactedHostPlaceholder = "(redacted host)"
 
+// displayHost reduces a host URL to scheme://host[:port] for display in a tool
+// response, stripping ALL userinfo (username and password) plus any path, query
+// and fragment. It is stricter than safeHost, which keeps the username for log
+// greps: issue #48 requires the response to expose no username, password or token.
+//
+// url.Parse ends the authority at the first '/', '?' or '#', so an unencoded one
+// inside userinfo makes it read part of the credential as the host:
+// "https://admin:1234/secret@centreon.example.com" parses with host "admin:1234",
+// where "1234" is the first segment of the password the operator typed, and
+// "https://admin:p@ssword/x@centreon.example.com" parses with host "ssword"
+// (issue #57). The tell in both is a '@' left AFTER the authority, raw or encoded,
+// which tailCarriesAtSign decides. An '@' inside the authority needs no such guard:
+// url.Parse splits at the last one, so the earlier ones belong to the userinfo it
+// decoded (they may land in the username rather than the password).
+//
+// Failing closed on that tell also catches a legitimate '@' in a path, query or
+// fragment, which no rule can tell apart from a mis-encoded credential without
+// resolving names. displayHost discards all three regardless, so only the host name
+// is lost. A bracketed authority is exempt: url.Parse requires the address part of
+// its body to parse as an IP literal, so it is the host and not a mis-read
+// credential: url.Parse rejects a '[' anywhere but the start, requires the address
+// to parse, and validates an RFC 6874 "%25" zone too, refusing an empty one or an
+// escaped byte inside it. Note the echoed zone has its "%25" decoded to a bare '%',
+// so an output naming a zone is not itself a reparseable URL.
+//
+// A URL with no scheme also fails closed, so the result is never a bare "://host".
+// validateHostScheme rejects a missing scheme before any display-path caller is
+// reached, so this only matters to a direct caller.
 func displayHost(host string) string {
-	if u, err := url.Parse(host); err == nil && u.Hostname() != "" {
+	u, err := url.Parse(host)
+	if err != nil || u.Scheme == "" || u.Hostname() == "" {
+		return redactedHostPlaceholder
+	}
+	if strings.HasPrefix(u.Host, "[") {
 		return u.Scheme + "://" + u.Host
 	}
-	return redactedHostPlaceholder
+	if tailCarriesAtSign(authorityTail(host)) {
+		return redactedHostPlaceholder
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// tailCarriesAtSign reports whether what follows an authority still holds a '@',
+// the tell that url.Parse may have ended the authority inside a credential rather
+// than at its delimiter.
+//
+// The '@' can arrive percent-encoded, and encoded more than once ("%2540"), so a
+// substring test for "%40" is not enough: the tail is unescaped repeatedly until no
+// escape is left. Every exit other than "no '@' and nothing left to unescape" fails
+// closed, because a tail that will not resolve cannot be ruled out as an encoded
+// delimiter. Three things reach that verdict: a malformed escape such as "%4%30", a
+// tail still escaped when the bound runs out, and a legitimate encoded percent sign,
+// since unescaping "%25" yields a bare '%' that the next pass cannot resolve. The
+// last of those is the only one an operator is likely to meet, in a path or query
+// such as "/100%25". The fixed-point exit is defensive only: a successful unescape of
+// a string containing '%' always shortens it.
+//
+// Unescaping rather than scanning for '%' is what keeps an ordinary encoded path such
+// as "/mon%20test" trusted, along with "%2F", "%3D" and a UTF-8 escape like "%C3%A9".
+// Note "%4c" is a valid escape for 'L', so a tail like "/pw%4chost" holds no
+// delimiter in any encoding and is trusted too.
+func tailCarriesAtSign(tail string) bool {
+	for range 4 {
+		if strings.ContainsRune(tail, '@') {
+			return true
+		}
+		if !strings.ContainsRune(tail, '%') {
+			return false
+		}
+		next, err := url.PathUnescape(tail)
+		if err != nil || next == tail {
+			return true
+		}
+		tail = next
+	}
+	return true
 }
 
 // maskAuthorityPassword is the textual fail-closed fallback for host strings whose

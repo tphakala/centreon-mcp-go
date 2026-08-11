@@ -375,7 +375,7 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 	}
 
 	if err := validateHostScheme(host, cfg.AllowHTTP); err != nil {
-		logger.Error("gateway: host scheme rejected", "host", safeHost(host), "error", err)
+		logger.Error("gateway: host rejected", "host", safeHost(host), "error", err)
 		return nil
 	}
 

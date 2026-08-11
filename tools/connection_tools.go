@@ -14,7 +14,7 @@ import (
 func RegisterConnectionTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger, host string) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_connection_test",
-		Description: "Verify that the configured Centreon API credentials authenticate and the API is reachable by fetching host status counts. On success the result names the connected Centreon host, with any embedded credentials redacted. Takes no arguments; call this first to confirm connectivity before using other tools. Read-only.",
+		Description: "Verify that the configured Centreon API credentials authenticate and the API is reachable by fetching host status counts. On success the result names the connected Centreon host, with any embedded credentials redacted, or reports the literal (redacted host) when the configured URL is shaped so that the host cannot be identified without risking exposure of a credential. Takes no arguments; call this first to confirm connectivity before using other tools. Read-only.",
 		Annotations: readOnlyTool("Test connection"),
 	}, connectionTestHandler(client, logger, host))
 }
