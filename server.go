@@ -182,7 +182,7 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 
 	switch cfg.Transport {
 	case transportStdio:
-		return runStdio(ctx, cfg, logger, httpClient)
+		return runStdio(ctx, cfg, logger, httpClient, &mcp.StdioTransport{})
 	case transportHTTP:
 		return runHTTP(ctx, cfg, logger, httpClient)
 	default:
@@ -190,8 +190,11 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	}
 }
 
-// runStdio starts the MCP server on stdin/stdout.
-func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *http.Client) error {
+// runStdio starts the MCP server on the given transport (mcp.StdioTransport in
+// production; an in-memory transport in tests). Taking the transport as a parameter
+// keeps the stdio display sink testable end to end without mutating the process's
+// os.Stdin/os.Stdout.
+func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *http.Client, transport mcp.Transport) error {
 	client, err := newCentreonClient(cfg.Host, cfg, logger, httpClient)
 	if err != nil {
 		return fmt.Errorf("creating centreon client: %w", err)
@@ -207,7 +210,7 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient 
 
 	s := buildServer(client, logger, displayHost(cfg.Host))
 	logger.Info("centreon-mcp-go ready", "transport", "stdio")
-	return s.Run(ctx, &mcp.StdioTransport{})
+	return s.Run(ctx, transport)
 }
 
 // logoutClientBounded logs client out during shutdown on a fresh, cancel-immune,

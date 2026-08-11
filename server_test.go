@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1030,10 +1029,14 @@ func TestRunHTTP_EnvToolResponseReportsRedactedHost(t *testing.T) {
 	waitForHealth(t, base+"/health")
 
 	c := mcp.NewClient(&mcp.Implementation{Name: "issue64-env-test", Version: "0"}, nil)
-	cs, err := c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: base + "/mcp"}, nil)
+	// DisableStandaloneSSE: this test only needs request/response (one CallTool), and
+	// leaving the persistent server-initiated SSE stream open would block
+	// httpServer.Shutdown on cancel until it times out.
+	cs, err := c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: base + "/mcp", DisableStandaloneSSE: true}, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
+	t.Cleanup(func() { _ = cs.Close() })
 
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "centreon_connection_test"})
 	if err != nil {
@@ -1053,7 +1056,6 @@ func TestRunHTTP_EnvToolResponseReportsRedactedHost(t *testing.T) {
 		t.Errorf("response leaked the password, got: %q", text)
 	}
 
-	_ = cs.Close()
 	cancel()
 	select {
 	case <-errCh:
@@ -1063,10 +1065,13 @@ func TestRunHTTP_EnvToolResponseReportsRedactedHost(t *testing.T) {
 }
 
 // TestRunStdio_ToolResponseReportsRedactedHost pins the stdio display sink in runStdio
-// (buildServer(client, logger, displayHost(cfg.Host)), issue #64). runStdio serves on
-// the process stdio (mcp.StdioTransport), so the test swaps os.Stdin/os.Stdout for pipes
-// and connects an in-process MCP client over them. It must not run in parallel with
-// anything because of that swap.
+// (buildServer(client, logger, displayHost(cfg.Host)), issue #64): a CENTREON_HOST that
+// embeds user:pass must reach a tool response with all userinfo stripped. runStdio takes
+// its transport as a parameter, so the test drives it over an in-memory transport pair
+// (the same seam TestGatewayServer_ToolResponseReportsRedactedHost uses) rather than
+// mutating the process's os.Stdin/os.Stdout. It dies when the call site stops calling
+// displayHost (the raw credential appears in the response) and when displayHost
+// degenerates to the placeholder (the loopback host:port disappears).
 func TestRunStdio_ToolResponseReportsRedactedHost(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 
@@ -1089,40 +1094,19 @@ func TestRunStdio_ToolResponseReportsRedactedHost(t *testing.T) {
 		AllowHTTP: true,
 	}
 
-	inR, inW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("stdin pipe: %v", err)
-	}
-	outR, outW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("stdout pipe: %v", err)
-	}
-	origStdin, origStdout := os.Stdin, os.Stdout
-	os.Stdin, os.Stdout = inR, outW
-
 	ctx, cancel := context.WithCancel(t.Context())
-	errCh := make(chan error, 1)
-	go func() { errCh <- runStdio(ctx, cfg, logger, nil) }()
+	defer cancel() // guarantees runStdio returns on every exit path, including t.Fatalf
 
-	defer func() {
-		cancel()
-		_ = inW.Close() // EOF on the server's stdin unblocks its read loop
-		select {
-		case <-errCh:
-		case <-time.After(15 * time.Second):
-			t.Error("runStdio did not return within 15s")
-		}
-		os.Stdin, os.Stdout = origStdin, origStdout
-		_ = inR.Close()
-		_ = outR.Close()
-		_ = outW.Close()
-	}()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runStdio(ctx, cfg, logger, nil, serverTransport) }()
 
 	c := mcp.NewClient(&mcp.Implementation{Name: "issue64-stdio-test", Version: "0"}, nil)
-	cs, err := c.Connect(ctx, &mcp.IOTransport{Reader: outR, Writer: inW}, nil)
+	cs, err := c.Connect(ctx, clientTransport, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
+	t.Cleanup(func() { _ = cs.Close() })
 
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "centreon_connection_test"})
 	if err != nil {
@@ -1141,5 +1125,11 @@ func TestRunStdio_ToolResponseReportsRedactedHost(t *testing.T) {
 	if strings.Contains(text, secret) {
 		t.Errorf("response leaked the password, got: %q", text)
 	}
-	_ = cs.Close()
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("runStdio did not return within 15s after context cancel")
+	}
 }
