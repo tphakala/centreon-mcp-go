@@ -13,9 +13,11 @@ import (
 
 // PlatformStatus combines host status counts, service status counts, and monitoring servers.
 type PlatformStatus struct {
-	// Host is the configured Centreon host, with any embedded credentials
-	// stripped (the caller passes it through displayHost); it names the instance
-	// the counts below describe.
+	// Host is the configured Centreon host, with any embedded credentials stripped
+	// (the caller passes it through displayHost); it names the instance the counts
+	// below describe. It can also be displayHost's fail-closed placeholder, for a
+	// configured URL whose authority cannot be trusted to be the host (issue #57),
+	// so treat it as a display string and do not parse it.
 	Host     string                                            `json:"host"`
 	Hosts    *centreon.HostStatusCount                         `json:"hosts"`
 	Services *centreon.ServiceStatusCount                      `json:"services"`
@@ -28,7 +30,7 @@ type PlatformStatus struct {
 func RegisterStatusTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger, host string) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_platform_status",
-		Description: "Return a combined live platform overview in one call: host status counts (up/down/unreachable), service status counts (ok/warning/critical/unknown), and the list of monitoring servers. The response also names the configured Centreon host (credentials redacted). Use this for an at-a-glance health snapshot; for the individual pieces use centreon_monitoring_host_status_counts, centreon_monitoring_service_status_counts, or centreon_server_list. Read-only.",
+		Description: "Return a combined live platform overview in one call: host status counts (up/down/unreachable), service status counts (ok/warning/critical/unknown), and the list of monitoring servers. The response also names the configured Centreon host (credentials redacted), or the literal (redacted host) when the configured URL is shaped so that the host cannot be identified without risking exposure of a credential. Use this for an at-a-glance health snapshot; for the individual pieces use centreon_monitoring_host_status_counts, centreon_monitoring_service_status_counts, or centreon_server_list. Read-only.",
 		Annotations: readOnlyTool("Platform status"),
 	}, platformStatusHandler(client, logger, host))
 }
