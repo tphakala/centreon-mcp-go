@@ -1,13 +1,47 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
 )
+
+// TestHostCategoryGetHandlerFn_ErrorNeverEchoesCredential pins one config
+// handler end to end (#63, #71): a mis-parsed base-URL credential must reach
+// neither the response nor the log. Each swept handler has its OWN inline
+// redact.Reason sink (same pattern, independent code), so this guards
+// hostCategoryGetHandlerFn specifically; the other per-handler sinks across the
+// tools package are exercised by TestToolHandlers_ErrorNeverEchoesCredential
+// (redact_sweep_test.go). Changing the redact.Reason call in
+// hostCategoryGetHandlerFn to pass the raw err turns this red.
+func TestHostCategoryGetHandlerFn_ErrorNeverEchoesCredential(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	fn := func(_ context.Context, _ int) (*centreon.HostCategory, error) {
+		return nil, misparsedClientErr()
+	}
+	handler := hostCategoryGetHandlerFn(fn, logger)
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 99})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result")
+	}
+	text := textOf(t, res)
+	assertNoCredential(t, text)
+	assertNoCredential(t, buf.String())
+	if !strings.Contains(text, "host category 99") || !strings.Contains(text, "DNS lookup failed") {
+		t.Errorf("want the target identified and the reason classified, got: %q", text)
+	}
+}
 
 // ---- Host Category ----
 

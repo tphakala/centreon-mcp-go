@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 const (
@@ -226,8 +227,13 @@ func commonListHandler[T any](
 	opts := buildListOptions(in)
 	resp, err := requester(ctx, opts...)
 	if err != nil {
-		logger.Error("failed: "+toolName, "error", err)
-		res, anyVal := errorResult("failed: %s: %v", toolName, err)
+		// Classify the upstream error before it reaches the log or the client:
+		// it can be a *url.Error embedding the base-URL credential (CWE-532;
+		// #63, #71). This is the single sink shared by every list tool that
+		// routes through commonListHandler.
+		reason := redact.Reason(err)
+		logger.Error("failed: "+toolName, "error", reason)
+		res, anyVal := errorResult("failed: %s: %s", toolName, reason)
 		return res, anyVal, nil
 	}
 

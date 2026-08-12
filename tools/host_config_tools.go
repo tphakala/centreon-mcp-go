@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterHostConfigTools registers all host configuration tools.
@@ -227,8 +228,9 @@ func hostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx conte
 		logger.Debug("centreon_host_get", "id", in.ID)
 		host, err := client.Hosts.GetByID(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_host_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get host %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get host %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(host)
@@ -258,8 +260,9 @@ func hostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			Macros:             macros,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_host_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create host %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create host %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_create", "Created host with ID %d", id)
@@ -283,8 +286,9 @@ func hostUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			IsActivated:         in.IsActivated,
 		}
 		if err := client.Hosts.Update(ctx, in.ID, &req); err != nil {
-			logger.Error("failed: centreon_host_update", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to update host %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_update", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to update host %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_update", "Updated host %d", in.ID)
@@ -297,8 +301,9 @@ func hostDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 		ctx = centreon.WithToolName(ctx, "centreon_host_delete")
 		logger.Info("centreon_host_delete", "id", in.ID)
 		if err := client.Hosts.Delete(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_host_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete host %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete host %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_delete", "Deleted host %d", in.ID)
@@ -318,8 +323,9 @@ func hostGroupGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx 
 		logger.Debug("centreon_host_group_get", "id", in.ID)
 		hg, err := client.HostGroups.Get(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_host_group_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get host group %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_group_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get host group %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(hg)
@@ -336,8 +342,9 @@ func hostGroupCreateHandler(client *centreon.Client, logger *slog.Logger) func(c
 			Alias: in.Alias,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_host_group_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create host group %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_group_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create host group %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_group_create", "Created host group with ID %d", id)
@@ -353,8 +360,9 @@ func hostGroupUpdateHandler(client *centreon.Client, logger *slog.Logger) func(c
 			Name:  in.Name,
 			Alias: in.Alias,
 		}); err != nil {
-			logger.Error("failed: centreon_host_group_update", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to update host group %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_group_update", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to update host group %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_group_update", "Updated host group %d", in.ID)
@@ -367,8 +375,9 @@ func hostGroupDeleteHandler(client *centreon.Client, logger *slog.Logger) func(c
 		ctx = centreon.WithToolName(ctx, "centreon_host_group_delete")
 		logger.Info("centreon_host_group_delete", "id", in.ID)
 		if err := client.HostGroups.Delete(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_host_group_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete host group %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_group_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete host group %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_group_delete", "Deleted host group %d", in.ID)
@@ -391,8 +400,9 @@ func hostCategoryGetHandlerFn(
 		logger.Debug("centreon_host_category_get", "id", in.ID)
 		cat, err := fn(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_host_category_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get host category %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_category_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get host category %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(cat)
@@ -416,8 +426,9 @@ func hostCategoryCreateHandlerFn(
 			Alias: in.Alias,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_host_category_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create host category %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_category_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create host category %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_category_create", "Created host category with ID %d", id)
@@ -440,8 +451,9 @@ func hostCategoryUpdateHandlerFn(
 			Name:  in.Name,
 			Alias: in.Alias,
 		}); err != nil {
-			logger.Error("failed: centreon_host_category_update", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to update host category %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_category_update", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to update host category %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_category_update", "Updated host category %d", in.ID)
@@ -461,8 +473,9 @@ func hostCategoryDeleteHandlerFn(
 		ctx = centreon.WithToolName(ctx, "centreon_host_category_delete")
 		logger.Info("centreon_host_category_delete", "id", in.ID)
 		if err := fn(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_host_category_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete host category %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_category_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete host category %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_category_delete", "Deleted host category %d", in.ID)
@@ -483,8 +496,9 @@ func hostSeverityGetHandlerFn(
 		logger.Debug("centreon_host_severity_get", "id", in.ID)
 		sev, err := fn(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_host_severity_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get host severity %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_severity_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get host severity %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(sev)
@@ -510,8 +524,9 @@ func hostSeverityCreateHandlerFn(
 			IconID: in.IconID,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_host_severity_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create host severity %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_severity_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create host severity %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_severity_create", "Created host severity with ID %d", id)
@@ -536,8 +551,9 @@ func hostSeverityUpdateHandlerFn(
 			Level:  in.Level,
 			IconID: in.IconID,
 		}); err != nil {
-			logger.Error("failed: centreon_host_severity_update", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to update host severity %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_severity_update", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to update host severity %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_severity_update", "Updated host severity %d", in.ID)
@@ -557,8 +573,9 @@ func hostSeverityDeleteHandlerFn(
 		ctx = centreon.WithToolName(ctx, "centreon_host_severity_delete")
 		logger.Info("centreon_host_severity_delete", "id", in.ID)
 		if err := fn(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_host_severity_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete host severity %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_severity_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete host severity %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_host_severity_delete", "Deleted host severity %d", in.ID)

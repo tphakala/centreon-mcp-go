@@ -48,7 +48,42 @@ func TestConnectionTestHandlerFn_ErrorOmitsHost(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected error result")
 	}
-	if got, want := textOf(t, res), "connection failed: boom"; got != want {
+	if got, want := textOf(t, res), "connection failed: request failed"; got != want {
 		t.Errorf("result text = %q, want %q", got, want)
+	}
+}
+
+// TestConnectionTestHandlerFn_ErrorNeverEchoesCredential pins #71 for this tool:
+// a client-call error carrying the base-URL credential must be classified before
+// it reaches the response, so neither the mis-parsed password nor the username
+// leaks. Deleting the redact.Reason call at connection_tools.go:37 turns this red.
+func TestConnectionTestHandlerFn_ErrorNeverEchoesCredential(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"mis-parsed authority", misparsedClientErr(), "connection failed: DNS lookup failed"},
+		{"well-formed userinfo leaks username", wellFormedClientErr(), "connection failed: network error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fetch := func(context.Context) (*centreon.HostStatusCount, error) {
+				return nil, tc.err
+			}
+			handler := connectionTestHandlerFn(fetch, testLogger(t), "https://centreon.example.com")
+			res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, struct{}{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.IsError {
+				t.Fatal("expected error result")
+			}
+			text := textOf(t, res)
+			assertNoCredential(t, text)
+			if text != tc.want {
+				t.Errorf("result text = %q, want %q", text, tc.want)
+			}
+		})
 	}
 }

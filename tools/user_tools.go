@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterUserTools registers all user and contact tools.
@@ -77,8 +78,9 @@ func userUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			Email: in.Email,
 		}
 		if err := client.Users.Update(ctx, in.ID, req); err != nil {
-			logger.Error("failed: centreon_user_update", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to update user %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_user_update", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to update user %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_user_update", "Updated user %d", in.ID)
@@ -113,8 +115,9 @@ func userFilterCreateHandler(client *centreon.Client, logger *slog.Logger) func(
 			Criteria: in.Criteria,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_user_filter_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create user filter %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_user_filter_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create user filter %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_user_filter_create", "Created user filter with ID %d", id)

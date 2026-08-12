@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterInfraTools registers all infrastructure tools.
@@ -100,8 +101,9 @@ func pollerApplyHandlerFn(
 		ctx = centreon.WithToolName(ctx, "centreon_poller_apply")
 		logger.Info("centreon_poller_apply", "pollerID", in.PollerID)
 		if err := fn(ctx, in.PollerID); err != nil {
-			logger.Error("failed: centreon_poller_apply", "error", err, "pollerID", in.PollerID)
-			res, anyVal := errorResult("failed to apply configuration for poller %d: %v", in.PollerID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_poller_apply", "error", reason, "pollerID", in.PollerID)
+			res, anyVal := errorResult("failed to apply configuration for poller %d: %s", in.PollerID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_poller_apply", "Applied configuration for poller %d", in.PollerID)
@@ -117,8 +119,9 @@ func pollerApplyAllHandlerFn(
 		ctx = centreon.WithToolName(ctx, "centreon_poller_apply_all")
 		logger.Info("centreon_poller_apply_all")
 		if err := fn(ctx); err != nil {
-			logger.Error("failed: centreon_poller_apply_all", "error", err)
-			res, anyVal := errorResult("failed to apply configuration for all pollers: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_poller_apply_all", "error", reason)
+			res, anyVal := errorResult("failed to apply configuration for all pollers: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_poller_apply_all", "Applied configuration for all pollers")
@@ -158,8 +161,9 @@ func timePeriodGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 		logger.Debug("centreon_time_period_get", "id", in.ID)
 		tp, err := client.TimePeriods.Get(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_time_period_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get time period %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_time_period_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get time period %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(tp)
@@ -181,8 +185,9 @@ func timePeriodCreateHandler(client *centreon.Client, logger *slog.Logger) func(
 			Days:  days,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_time_period_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create time period %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_time_period_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create time period %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_time_period_create", "Created time period with ID %d", id)
@@ -207,8 +212,9 @@ func timePeriodUpdateHandlerFn(
 			Days:      days,
 			Templates: in.Templates,
 		}); err != nil {
-			logger.Error("failed: centreon_time_period_update", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to update time period %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_time_period_update", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to update time period %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_time_period_update", "Updated time period %d", in.ID)
@@ -228,8 +234,9 @@ func timePeriodDeleteHandlerFn(
 		ctx = centreon.WithToolName(ctx, "centreon_time_period_delete")
 		logger.Info("centreon_time_period_delete", "id", in.ID)
 		if err := fn(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_time_period_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete time period %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_time_period_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete time period %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_time_period_delete", "Deleted time period %d", in.ID)
