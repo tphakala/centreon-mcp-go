@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterDowntimeTools registers all downtime tools.
@@ -100,8 +101,9 @@ func downtimeGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx c
 		logger.Debug("centreon_downtime_get", "id", in.ID)
 		downtime, err := client.Downtimes.Get(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_downtime_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get downtime %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_downtime_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get downtime %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(downtime)
@@ -114,8 +116,9 @@ func downtimeCancelHandler(client *centreon.Client, logger *slog.Logger) func(ct
 		ctx = centreon.WithToolName(ctx, "centreon_downtime_cancel")
 		logger.Info("centreon_downtime_cancel", "id", in.ID)
 		if err := client.Downtimes.Cancel(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_downtime_cancel", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to cancel downtime %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_downtime_cancel", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to cancel downtime %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_downtime_cancel", "Downtime %d cancelled", in.ID)
@@ -131,8 +134,9 @@ func downtimeHostListHandler(client *centreon.Client, logger *slog.Logger) func(
 		opts := buildListOptions(listIn)
 		resp, err := client.Downtimes.ListForHost(ctx, in.HostID, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_downtime_host_list", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to list downtimes for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_downtime_host_list", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to list downtimes for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(resp)
@@ -148,8 +152,9 @@ func downtimeServiceListHandler(client *centreon.Client, logger *slog.Logger) fu
 		opts := buildListOptions(listIn)
 		resp, err := client.Downtimes.ListForService(ctx, in.HostID, in.ServiceID, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_downtime_service_list", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)
-			res, anyVal := errorResult("failed to list downtimes for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_downtime_service_list", "error", reason, "hostID", in.HostID, "serviceID", in.ServiceID)
+			res, anyVal := errorResult("failed to list downtimes for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(resp)
@@ -184,8 +189,9 @@ func downtimeHostCreateHandler(client *centreon.Client, logger *slog.Logger) fun
 			WithServices: in.WithServices,
 		}
 		if err := client.Downtimes.CreateForHost(ctx, in.HostID, downtimeReq); err != nil {
-			logger.Error("failed: centreon_downtime_host_create", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to create downtime for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_downtime_host_create", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to create downtime for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_downtime_host_create", "Downtime scheduled for host %d", in.HostID)
@@ -221,8 +227,9 @@ func downtimeServiceCreateHandler(client *centreon.Client, logger *slog.Logger) 
 			Duration:  in.Duration,
 		}
 		if err := client.Downtimes.CreateForService(ctx, in.HostID, in.ServiceID, downtimeReq); err != nil {
-			logger.Error("failed: centreon_downtime_service_create", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)
-			res, anyVal := errorResult("failed to create downtime for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_downtime_service_create", "error", reason, "hostID", in.HostID, "serviceID", in.ServiceID)
+			res, anyVal := errorResult("failed to create downtime for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_downtime_service_create", "Downtime scheduled for service %d on host %d", in.ServiceID, in.HostID)
@@ -235,8 +242,9 @@ func downtimeHostCancelHandler(client *centreon.Client, logger *slog.Logger) fun
 		ctx = centreon.WithToolName(ctx, "centreon_downtime_host_cancel")
 		logger.Info("centreon_downtime_host_cancel", "hostID", in.HostID)
 		if err := client.Downtimes.CancelForHost(ctx, in.HostID); err != nil {
-			logger.Error("failed: centreon_downtime_host_cancel", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to cancel downtimes for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_downtime_host_cancel", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to cancel downtimes for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_downtime_host_cancel", "Downtime cancelled for host %d", in.HostID)
@@ -249,8 +257,9 @@ func downtimeServiceCancelHandler(client *centreon.Client, logger *slog.Logger) 
 		ctx = centreon.WithToolName(ctx, "centreon_downtime_service_cancel")
 		logger.Info("centreon_downtime_service_cancel", "hostID", in.HostID, "serviceID", in.ServiceID)
 		if err := client.Downtimes.CancelForService(ctx, in.HostID, in.ServiceID); err != nil {
-			logger.Error("failed: centreon_downtime_service_cancel", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)
-			res, anyVal := errorResult("failed to cancel downtimes for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_downtime_service_cancel", "error", reason, "hostID", in.HostID, "serviceID", in.ServiceID)
+			res, anyVal := errorResult("failed to cancel downtimes for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_downtime_service_cancel", "Downtime cancelled for service %d on host %d", in.ServiceID, in.HostID)

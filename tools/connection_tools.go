@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterConnectionTools registers all connection tools. host is the
@@ -33,8 +34,12 @@ func connectionTestHandlerFn(fetchStatus func(context.Context) (*centreon.HostSt
 		logger.Debug("centreon_connection_test")
 		_, err := fetchStatus(ctx)
 		if err != nil {
-			logger.Error("failed: centreon_connection_test", "error", err)
-			res, anyVal := errorResult("connection failed: %v", err)
+			// Classify the error before it reaches the log or the client: an
+			// upstream *url.Error can embed the base-URL credential (CWE-532;
+			// #63, #71), and neither sink may carry it.
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_connection_test", "error", reason)
+			res, anyVal := errorResult("connection failed: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := textResult("Connection successful (host: %s)", host)

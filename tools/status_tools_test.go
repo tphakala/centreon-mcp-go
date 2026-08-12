@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -204,8 +205,47 @@ func TestPlatformStatusHandlerFn_ReportsError(t *testing.T) {
 			if strings.Contains(text, testStatusHost) {
 				t.Errorf("error result should not include the host, got: %q", text)
 			}
+			if strings.Contains(text, "boom") {
+				t.Errorf("error result should not echo the raw upstream error text, got: %q", text)
+			}
 		})
 	}
+}
+
+// TestPlatformStatusHandlerFn_ErrorNeverEchoesCredential pins #63 and #71 for
+// this tool: logReadError is the single choke point for the log line and the
+// errgroup error the client sees, so a client-call error carrying the base-URL
+// credential must be classified in both. The mis-parsed authority also carries
+// the mis-read host in the wrapped resolver error, so it exercises that case.
+// Deleting the redact.Reason call in logReadError turns this red.
+func TestPlatformStatusHandlerFn_ErrorNeverEchoesCredential(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	fetchHosts := func(context.Context) (*centreon.HostStatusCount, error) {
+		return nil, misparsedClientErr()
+	}
+	fetchServices := func(context.Context) (*centreon.ServiceStatusCount, error) {
+		return &centreon.ServiceStatusCount{}, nil
+	}
+	fetchServers := func(context.Context) (*centreon.ListResponse[centreon.MonitoringServer], error) {
+		return &centreon.ListResponse[centreon.MonitoringServer]{}, nil
+	}
+
+	h := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, logger, testStatusHost)
+	res, _, err := h(t.Context(), &mcp.CallToolRequest{}, struct{}{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result")
+	}
+	text := textOf(t, res)
+	assertNoCredential(t, text)
+	if !strings.Contains(text, "host status counts") || !strings.Contains(text, "DNS lookup failed") {
+		t.Errorf("want the failing read identified and the reason classified, got: %q", text)
+	}
+	assertNoCredential(t, buf.String())
 }
 
 // TestPlatformStatusHandlerFn_SuppressesCancellationLogs pins that a single

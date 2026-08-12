@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -42,10 +43,16 @@ func RegisterStatusTools(s *mcp.Server, client *centreon.Client, logger *slog.Lo
 // It then returns the wrapped error for errgroup. Skipping cancelled reads keeps
 // one logical failure to one error line instead of three.
 func logReadError(logger *slog.Logger, part, msg string, err error) error {
+	// Classify once, up front, so the same credential-safe reason reaches both
+	// the log line and the errgroup error the client eventually sees (CWE-532;
+	// #63, #71). The cancellation check stays on the incoming err. The wrap
+	// deliberately drops %w: the raw chain is the leak vector and nothing
+	// downstream unwraps it (g.Wait's error is only printed via %v).
+	reason := redact.Reason(err)
 	if !errors.Is(err, context.Canceled) {
-		logger.Error("failed: centreon_platform_status ("+part+")", "error", err)
+		logger.Error("failed: centreon_platform_status ("+part+")", "error", reason)
 	}
-	return fmt.Errorf("%s: %w", msg, err)
+	return fmt.Errorf("%s: %s", msg, reason)
 }
 
 func platformStatusHandler(client *centreon.Client, logger *slog.Logger, host string) func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
@@ -109,6 +116,10 @@ func platformStatusHandlerFn(
 			return nil
 		})
 		if err := g.Wait(); err != nil {
+			// err can only be a logReadError product, which already ran the
+			// upstream error through redact.Reason, so it carries no credential.
+			// Do not re-run redact.Reason here: that would reclassify the wrapped
+			// "failed to get ...: <reason>" string down to "request failed".
 			res, anyVal := errorResult("%v", err)
 			return res, anyVal, nil
 		}

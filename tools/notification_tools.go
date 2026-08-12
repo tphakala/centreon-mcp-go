@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterNotificationTools registers all notification policy tools.
@@ -29,8 +30,9 @@ func notificationPolicyHostGetHandler(client *centreon.Client, logger *slog.Logg
 		logger.Debug("centreon_notification_policy_host_get", "hostID", in.HostID)
 		np, err := client.NotificationPolicies.GetForHost(ctx, in.HostID)
 		if err != nil {
-			logger.Error("failed: centreon_notification_policy_host_get", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to get notification policy for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_notification_policy_host_get", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to get notification policy for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(np)
@@ -44,8 +46,9 @@ func notificationPolicyServiceGetHandler(client *centreon.Client, logger *slog.L
 		logger.Debug("centreon_notification_policy_service_get", "hostID", in.HostID, "serviceID", in.ServiceID)
 		np, err := client.NotificationPolicies.GetForService(ctx, in.HostID, in.ServiceID)
 		if err != nil {
-			logger.Error("failed: centreon_notification_policy_service_get", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)
-			res, anyVal := errorResult("failed to get notification policy for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_notification_policy_service_get", "error", reason, "hostID", in.HostID, "serviceID", in.ServiceID)
+			res, anyVal := errorResult("failed to get notification policy for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(np)

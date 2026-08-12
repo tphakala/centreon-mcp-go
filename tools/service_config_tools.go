@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterServiceConfigTools registers all service configuration tools.
@@ -196,8 +197,9 @@ func serviceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 			Macros:            macros,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_service_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create service %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create service %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_create", "Created service with ID %d", id)
@@ -219,8 +221,9 @@ func serviceUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 			IsActivated:         in.IsActivated,
 		}
 		if err := client.Services.Update(ctx, in.ID, &req); err != nil {
-			logger.Error("failed: centreon_service_update", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to update service %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_update", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to update service %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_update", "Updated service %d", in.ID)
@@ -233,8 +236,9 @@ func serviceDeleteHandler(client *centreon.Client, logger *slog.Logger) func(ctx
 		ctx = centreon.WithToolName(ctx, "centreon_service_delete")
 		logger.Info("centreon_service_delete", "id", in.ID)
 		if err := client.Services.Delete(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_service_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete service %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete service %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_delete", "Deleted service %d", in.ID)
@@ -257,8 +261,9 @@ func serviceGroupCreateHandler(client *centreon.Client, logger *slog.Logger) fun
 			Alias: in.Alias,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_service_group_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create service group %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_group_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create service group %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_group_create", "Created service group with ID %d", id)
@@ -271,8 +276,9 @@ func serviceGroupDeleteHandler(client *centreon.Client, logger *slog.Logger) fun
 		ctx = centreon.WithToolName(ctx, "centreon_service_group_delete")
 		logger.Info("centreon_service_group_delete", "id", in.ID)
 		if err := client.ServiceGroups.Delete(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_service_group_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete service group %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_group_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete service group %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_group_delete", "Deleted service group %d", in.ID)
@@ -295,8 +301,9 @@ func serviceCategoryCreateHandler(client *centreon.Client, logger *slog.Logger) 
 			Alias: in.Alias,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_service_category_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create service category %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_category_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create service category %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_category_create", "Created service category with ID %d", id)
@@ -309,8 +316,9 @@ func serviceCategoryDeleteHandler(client *centreon.Client, logger *slog.Logger) 
 		ctx = centreon.WithToolName(ctx, "centreon_service_category_delete")
 		logger.Info("centreon_service_category_delete", "id", in.ID)
 		if err := client.ServiceCategories.Delete(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_service_category_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete service category %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_category_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete service category %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_category_delete", "Deleted service category %d", in.ID)
@@ -338,8 +346,9 @@ func serviceSeverityCreateHandlerFn(
 			IconID: in.IconID,
 		})
 		if err != nil {
-			logger.Error("failed: centreon_service_severity_create", "error", err, "name", in.Name)
-			res, anyVal := errorResult("failed to create service severity %q: %v", in.Name, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_severity_create", "error", reason, "name", in.Name)
+			res, anyVal := errorResult("failed to create service severity %q: %s", in.Name, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_severity_create", "Created service severity with ID %d", id)
@@ -364,8 +373,9 @@ func serviceSeverityUpdateHandlerFn(
 			Level:  in.Level,
 			IconID: in.IconID,
 		}); err != nil {
-			logger.Error("failed: centreon_service_severity_update", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to update service severity %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_severity_update", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to update service severity %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_severity_update", "Updated service severity %d", in.ID)
@@ -385,8 +395,9 @@ func serviceSeverityDeleteHandlerFn(
 		ctx = centreon.WithToolName(ctx, "centreon_service_severity_delete")
 		logger.Info("centreon_service_severity_delete", "id", in.ID)
 		if err := fn(ctx, in.ID); err != nil {
-			logger.Error("failed: centreon_service_severity_delete", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to delete service severity %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_service_severity_delete", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to delete service severity %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_service_severity_delete", "Deleted service severity %d", in.ID)

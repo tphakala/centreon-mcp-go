@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterMonitoringTools registers all monitoring tools.
@@ -80,8 +81,9 @@ func monitoringHostListHandler(client *centreon.Client, logger *slog.Logger) fun
 		opts := buildMonitoringListOptions(in)
 		resp, err := client.MonitoringHosts.List(ctx, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_host_list", "error", err)
-			res, anyVal := errorResult("failed: centreon_monitoring_host_list: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_host_list", "error", reason)
+			res, anyVal := errorResult("failed: centreon_monitoring_host_list: %s", reason)
 			return res, anyVal, nil
 		}
 		logger.Debug("centreon_monitoring_host_list completed", "results", len(resp.Result), "total", resp.Meta.Total)
@@ -96,8 +98,9 @@ func monitoringHostGetHandler(client *centreon.Client, logger *slog.Logger) func
 		logger.Debug("centreon_monitoring_host_get", "id", in.ID)
 		host, err := client.MonitoringHosts.Get(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_host_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get monitoring host %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_host_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get monitoring host %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(host)
@@ -113,8 +116,9 @@ func monitoringHostServicesHandler(client *centreon.Client, logger *slog.Logger)
 		opts := buildMonitoringListOptions(listIn)
 		resp, err := client.MonitoringHosts.Services(ctx, in.HostID, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_host_services", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to list services for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_host_services", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to list services for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(resp)
@@ -130,8 +134,9 @@ func monitoringHostTimelineHandler(client *centreon.Client, logger *slog.Logger)
 		opts := buildMonitoringListOptions(listIn)
 		resp, err := client.MonitoringHosts.Timeline(ctx, in.HostID, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_host_timeline", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to get timeline for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_host_timeline", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to get timeline for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(resp)
@@ -145,8 +150,9 @@ func monitoringHostStatusCountsHandler(client *centreon.Client, logger *slog.Log
 		logger.Debug("centreon_monitoring_host_status_counts")
 		counts, err := client.MonitoringHosts.StatusCounts(ctx)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_host_status_counts", "error", err)
-			res, anyVal := errorResult("failed to get host status counts: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_host_status_counts", "error", reason)
+			res, anyVal := errorResult("failed to get host status counts: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(counts)
@@ -161,8 +167,9 @@ func monitoringServiceListHandler(client *centreon.Client, logger *slog.Logger) 
 		opts := buildMonitoringListOptions(in)
 		resp, err := client.MonitoringServices.List(ctx, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_service_list", "error", err)
-			res, anyVal := errorResult("failed: centreon_monitoring_service_list: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_service_list", "error", reason)
+			res, anyVal := errorResult("failed: centreon_monitoring_service_list: %s", reason)
 			return res, anyVal, nil
 		}
 		logger.Debug("centreon_monitoring_service_list completed", "results", len(resp.Result), "total", resp.Meta.Total)
@@ -177,8 +184,9 @@ func monitoringServiceStatusCountsHandler(client *centreon.Client, logger *slog.
 		logger.Debug("centreon_monitoring_service_status_counts")
 		counts, err := client.MonitoringServices.StatusCounts(ctx)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_service_status_counts", "error", err)
-			res, anyVal := errorResult("failed to get service status counts: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_service_status_counts", "error", reason)
+			res, anyVal := errorResult("failed to get service status counts: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(counts)
@@ -290,8 +298,9 @@ func monitoringResourceListHandler(client *centreon.Client, logger *slog.Logger)
 		}
 		resp, err := client.Monitoring.List(ctx, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_resource_list", "error", err)
-			res, anyVal := errorResult("failed: centreon_monitoring_resource_list: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_resource_list", "error", reason)
+			res, anyVal := errorResult("failed: centreon_monitoring_resource_list: %s", reason)
 			return res, anyVal, nil
 		}
 		logger.Debug("centreon_monitoring_resource_list completed", "results", len(resp.Result), "total", resp.Meta.Total)
@@ -306,8 +315,9 @@ func monitoringResourceHostGetHandler(client *centreon.Client, logger *slog.Logg
 		logger.Debug("centreon_monitoring_resource_host_get", "id", in.ID)
 		host, err := client.Monitoring.GetHost(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_resource_host_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get monitoring resource host %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_resource_host_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get monitoring resource host %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(host)
@@ -321,8 +331,9 @@ func monitoringResourceServiceGetHandler(client *centreon.Client, logger *slog.L
 		logger.Debug("centreon_monitoring_resource_service_get", "hostID", in.HostID, "serviceID", in.ServiceID)
 		svc, err := client.Monitoring.GetService(ctx, in.HostID, in.ServiceID)
 		if err != nil {
-			logger.Error("failed: centreon_monitoring_resource_service_get", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)
-			res, anyVal := errorResult("failed to get monitoring resource service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_monitoring_resource_service_get", "error", reason, "hostID", in.HostID, "serviceID", in.ServiceID)
+			res, anyVal := errorResult("failed to get monitoring resource service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(svc)

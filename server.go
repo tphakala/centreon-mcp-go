@@ -16,6 +16,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 	"github.com/tphakala/centreon-mcp-go/tools"
 	"golang.org/x/sync/errgroup"
 )
@@ -93,7 +94,10 @@ func noCrossHostRedirect(req *http.Request, via []*http.Request) error {
 	}
 	origin := via[0].URL.Hostname()
 	if target := req.URL.Hostname(); !strings.EqualFold(target, origin) {
-		return fmt.Errorf("refusing cross-host redirect from %q to %q", origin, target)
+		// Wrap the sentinel so redact.Reason can classify this guard across the
+		// *url.Error that http.Client.Do wraps it in, without importing this
+		// package. The sentinel's own text still contains "cross-host redirect".
+		return fmt.Errorf("%w from %q to %q", redact.ErrCrossHostRedirect, origin, target)
 	}
 	return nil
 }
@@ -197,12 +201,12 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *http.Client, transport mcp.Transport) error {
 	client, err := newCentreonClient(cfg.Host, cfg, logger, httpClient)
 	if err != nil {
-		return fmt.Errorf("creating centreon client: %w", err)
+		return fmt.Errorf("creating centreon client for host %s: %s", safeHost(cfg.Host), redact.Reason(err))
 	}
 
 	if cfg.Token == "" {
 		if err := client.Login(ctx); err != nil {
-			return fmt.Errorf("centreon login: %w", err)
+			return fmt.Errorf("centreon login failed (host %s): %s", safeHost(cfg.Host), redact.Reason(err))
 		}
 		defer logoutClientBounded(ctx, client, logger)
 		logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
@@ -230,7 +234,7 @@ func logoutClientBounded(ctx context.Context, client *centreon.Client, logger *s
 	logoutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownLogoutTimeout)
 	defer cancel()
 	if err := client.Logout(logoutCtx); err != nil {
-		logger.Debug("centreon client logout failed", "error", err)
+		logger.Debug("centreon client logout failed", "error", redact.Reason(err))
 	} else {
 		logger.Info("centreon client logged out")
 	}
@@ -248,11 +252,11 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 	if cfg.AuthMode == authModeEnv {
 		client, err := newCentreonClient(cfg.Host, cfg, logger, httpClient)
 		if err != nil {
-			return fmt.Errorf("creating centreon client: %w", err)
+			return fmt.Errorf("creating centreon client for host %s: %s", safeHost(cfg.Host), redact.Reason(err))
 		}
 		if cfg.Token == "" {
 			if err := client.Login(ctx); err != nil {
-				return fmt.Errorf("centreon login: %w", err)
+				return fmt.Errorf("centreon login failed (host %s): %s", safeHost(cfg.Host), redact.Reason(err))
 			}
 			logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
 		}
@@ -350,7 +354,7 @@ func gracefulShutdown(serveCtx context.Context, httpServer *http.Server, sharedC
 
 	if sharedClient != nil && cfg.Token == "" {
 		if err := sharedClient.Logout(logoutCtx); err != nil {
-			logger.Debug("centreon client logout failed", "error", err)
+			logger.Debug("centreon client logout failed", "error", redact.Reason(err))
 		} else {
 			logger.Info("centreon client logged out")
 		}
@@ -402,13 +406,13 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 
 	client, err := newCentreonClient(host, gwCfg, logger, httpClient)
 	if err != nil {
-		logger.Error("gateway: failed to create client", "host", safeHost(host), "error", err)
+		logger.Error("gateway: failed to create client", "host", safeHost(host), "error", redact.Reason(err))
 		return nil
 	}
 
 	if gwCfg.Token == "" {
 		if err := client.Login(r.Context()); err != nil {
-			logger.Error("gateway: authentication failed", "host", safeHost(host), "error", err)
+			logger.Error("gateway: authentication failed", "host", safeHost(host), "error", redact.Reason(err))
 			return nil
 		}
 		// Cache the token for subsequent requests
@@ -477,11 +481,11 @@ func logoutCachedToken(ctx context.Context, host, token string, logger *slog.Log
 	gwCfg := &Config{Token: token}
 	client, err := newCentreonClient(host, gwCfg, nil, httpClient)
 	if err != nil {
-		logger.Debug("gateway: failed to build client for token logout", "host", safeHost(host), "error", err)
+		logger.Debug("gateway: failed to build client for token logout", "host", safeHost(host), "error", redact.Reason(err))
 		return
 	}
 	if err := client.Logout(ctx); err != nil {
-		logger.Debug("gateway: token logout failed", "host", safeHost(host), "error", err)
+		logger.Debug("gateway: token logout failed", "host", safeHost(host), "error", redact.Reason(err))
 		return
 	}
 	logger.Debug("gateway: logged out cached token", "host", safeHost(host))

@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterAcknowledgementTools registers all acknowledgement tools.
@@ -91,8 +92,9 @@ func acknowledgementGetHandler(client *centreon.Client, logger *slog.Logger) fun
 		logger.Debug("centreon_acknowledgement_get", "id", in.ID)
 		ack, err := client.Acknowledgements.Get(ctx, in.ID)
 		if err != nil {
-			logger.Error("failed: centreon_acknowledgement_get", "error", err, "id", in.ID)
-			res, anyVal := errorResult("failed to get acknowledgement %d: %v", in.ID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_acknowledgement_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get acknowledgement %d: %s", in.ID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(ack)
@@ -108,8 +110,9 @@ func acknowledgementHostListHandler(client *centreon.Client, logger *slog.Logger
 		opts := buildListOptions(listIn)
 		resp, err := client.Acknowledgements.ListForHost(ctx, in.HostID, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_acknowledgement_host_list", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to list acknowledgements for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_acknowledgement_host_list", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to list acknowledgements for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(resp)
@@ -125,8 +128,9 @@ func acknowledgementServiceListHandler(client *centreon.Client, logger *slog.Log
 		opts := buildListOptions(listIn)
 		resp, err := client.Acknowledgements.ListForService(ctx, in.HostID, in.ServiceID, opts...)
 		if err != nil {
-			logger.Error("failed: centreon_acknowledgement_service_list", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)
-			res, anyVal := errorResult("failed to list acknowledgements for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_acknowledgement_service_list", "error", reason, "hostID", in.HostID, "serviceID", in.ServiceID)
+			res, anyVal := errorResult("failed to list acknowledgements for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := jsonResult(resp)
@@ -146,8 +150,9 @@ func acknowledgementHostCreateHandler(client *centreon.Client, logger *slog.Logg
 			WithServices:        in.WithServices,
 		}
 		if err := client.Acknowledgements.CreateForHost(ctx, in.HostID, ackReq); err != nil {
-			logger.Error("failed: centreon_acknowledgement_host_create", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to create acknowledgement for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_acknowledgement_host_create", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to create acknowledgement for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_acknowledgement_host_create", "Acknowledgement created for host %d", in.HostID)
@@ -166,8 +171,9 @@ func acknowledgementServiceCreateHandler(client *centreon.Client, logger *slog.L
 			IsPersistentComment: in.IsPersistentComment,
 		}
 		if err := client.Acknowledgements.CreateForService(ctx, in.HostID, in.ServiceID, ackReq); err != nil {
-			logger.Error("failed: centreon_acknowledgement_service_create", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)
-			res, anyVal := errorResult("failed to create acknowledgement for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_acknowledgement_service_create", "error", reason, "hostID", in.HostID, "serviceID", in.ServiceID)
+			res, anyVal := errorResult("failed to create acknowledgement for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_acknowledgement_service_create", "Acknowledgement created for service %d on host %d", in.ServiceID, in.HostID)
@@ -180,8 +186,9 @@ func acknowledgementHostCancelHandler(client *centreon.Client, logger *slog.Logg
 		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_host_cancel")
 		logger.Info("centreon_acknowledgement_host_cancel", "hostID", in.HostID)
 		if err := client.Acknowledgements.CancelForHost(ctx, in.HostID); err != nil {
-			logger.Error("failed: centreon_acknowledgement_host_cancel", "error", err, "hostID", in.HostID)
-			res, anyVal := errorResult("failed to cancel acknowledgement for host %d: %v", in.HostID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_acknowledgement_host_cancel", "error", reason, "hostID", in.HostID)
+			res, anyVal := errorResult("failed to cancel acknowledgement for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_acknowledgement_host_cancel", "Acknowledgement cancelled for host %d", in.HostID)
@@ -194,8 +201,9 @@ func acknowledgementServiceCancelHandler(client *centreon.Client, logger *slog.L
 		ctx = centreon.WithToolName(ctx, "centreon_acknowledgement_service_cancel")
 		logger.Info("centreon_acknowledgement_service_cancel", "hostID", in.HostID, "serviceID", in.ServiceID)
 		if err := client.Acknowledgements.CancelForService(ctx, in.HostID, in.ServiceID); err != nil {
-			logger.Error("failed: centreon_acknowledgement_service_cancel", "error", err, "hostID", in.HostID, "serviceID", in.ServiceID)
-			res, anyVal := errorResult("failed to cancel acknowledgement for service (host=%d, service=%d): %v", in.HostID, in.ServiceID, err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_acknowledgement_service_cancel", "error", reason, "hostID", in.HostID, "serviceID", in.ServiceID)
+			res, anyVal := errorResult("failed to cancel acknowledgement for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_acknowledgement_service_cancel", "Acknowledgement cancelled for service %d on host %d", in.ServiceID, in.HostID)

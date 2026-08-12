@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	centreon "github.com/tphakala/centreon-go-client"
+	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
 // RegisterOperationsTools registers all bulk operation tools.
@@ -69,8 +70,9 @@ func bulkAcknowledgeHandler(client *centreon.Client, logger *slog.Logger) func(c
 			IsPersistentComment: in.IsPersistentComment,
 		}
 		if err := client.Operations.Acknowledge(ctx, req); err != nil {
-			logger.Error("failed: centreon_resource_acknowledge", "error", err)
-			res, anyVal := errorResult("failed to acknowledge: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_resource_acknowledge", "error", reason)
+			res, anyVal := errorResult("failed to acknowledge: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_resource_acknowledge", "Acknowledged %s %d", in.Type, in.ID)
@@ -121,8 +123,9 @@ func bulkDowntimeHandler(client *centreon.Client, logger *slog.Logger) func(ctx 
 			Duration:  in.Duration,
 		}
 		if err := client.Operations.Downtime(ctx, downtimeReq); err != nil {
-			logger.Error("failed: centreon_resource_downtime", "error", err)
-			res, anyVal := errorResult("failed to schedule downtime: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_resource_downtime", "error", reason)
+			res, anyVal := errorResult("failed to schedule downtime: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_resource_downtime", "Scheduled downtime for %s %d", in.Type, in.ID)
@@ -149,8 +152,9 @@ func bulkCheckHandler(client *centreon.Client, logger *slog.Logger) func(ctx con
 			Resources: []centreon.ResourceRef{ref},
 		}
 		if err := client.Operations.Check(ctx, req); err != nil {
-			logger.Error("failed: centreon_resource_check", "error", err)
-			res, anyVal := errorResult("failed to force check: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_resource_check", "error", reason)
+			res, anyVal := errorResult("failed to force check: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_resource_check", "Forced check for %s %d", in.Type, in.ID)
@@ -189,8 +193,9 @@ func bulkSubmitHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			},
 		}
 		if err := client.Operations.Submit(ctx, req); err != nil {
-			logger.Error("failed: centreon_resource_submit", "error", err)
-			res, anyVal := errorResult("failed to submit check result: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_resource_submit", "error", reason)
+			res, anyVal := errorResult("failed to submit check result: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_resource_submit", "Submitted check result for %s %d (status=%d)", in.Type, in.ID, in.Status)
@@ -219,8 +224,9 @@ func bulkCommentHandler(client *centreon.Client, logger *slog.Logger) func(ctx c
 			Comment:   in.Comment,
 		}
 		if err := client.Operations.Comment(ctx, req); err != nil {
-			logger.Error("failed: centreon_resource_comment", "error", err)
-			res, anyVal := errorResult("failed to add comment: %v", err)
+			reason := redact.Reason(err)
+			logger.Error("failed: centreon_resource_comment", "error", reason)
+			res, anyVal := errorResult("failed to add comment: %s", reason)
 			return res, anyVal, nil
 		}
 		res, anyVal := successResult(logger, "centreon_resource_comment", "Added comment to %s %d", in.Type, in.ID)
