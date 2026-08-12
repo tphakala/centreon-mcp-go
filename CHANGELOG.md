@@ -43,8 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now logged as `https://user:xxxxx`, or `https://xxxxx` when even the username
   boundary is unreadable, instead of being logged verbatim. The host name is lost
   in those cases because its position cannot be trusted. A URL carrying only one
-  half of a credential shape, such as an encoded `@` in a path with no `:`, is
-  still logged unchanged. (#68, #75)
+  half of a credential shape is still logged unchanged, so an encoded `@` in the
+  path of a portless host does not trigger it; note a port supplies the missing
+  `:`, so the same path behind `host:8443` is masked to `https://host:xxxxx`.
+  Configuration errors that quote a rejected host now name the parse failure
+  ("invalid port after host") instead of quoting the offending span, which is what
+  reprinted the credential; the masked host is still quoted alongside. (#68, #75)
 
 ## [1.0.0]
 

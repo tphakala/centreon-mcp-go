@@ -304,11 +304,13 @@ func validateHostScheme(host string, allowHTTP bool) error {
 // That rule is not an absolute, and the exceptions are the interesting part. A
 // credential needs BOTH a delimiter and a separator, so an input carrying only one
 // of them is left intact: "https://host/path/%25%34%30" decodes to a '@' and hides
-// nothing. The username is kept whenever a raw colon marks where the password
-// starts, so the common fail-closed output is "https://admin:xxxxx" rather than
-// "https://xxxxx". And the bounded decode fails closed on exhaustion, so an
-// ordinary path nested deeper than maxDecodeRounds is treated as ambiguous rather
-// than as proof of anything.
+// nothing. The username is kept when a raw colon marks where the password starts,
+// giving "https://admin:xxxxx" instead of "https://xxxxx"; that is the usual shape
+// for issue #68, while issue #75 mostly loses the username too, since an encoded
+// separator is exactly the case where no raw colon marks the boundary. And the
+// bounded decode reports exhaustion as uncertainty rather
+// than as a finding, so an ordinary path nested deeper than maxDecodeRounds is left
+// alone unless something else in the input actually looks like a credential.
 func safeHost(host string) string {
 	if u, err := url.Parse(host); err == nil {
 		if u.User != nil {
@@ -377,18 +379,23 @@ func redactedCoversCredential(u *url.URL, host string) bool {
 	if tailCarriesAtSign(afterAuthorityDelimiter(host)) {
 		return false
 	}
-	if _, hasPassword := u.User.Password(); hasPassword {
-		return true
-	}
-	// Go splits userinfo on a RAW ':' only, so an encoded separator ("%3A") leaves
-	// the whole span as the username with no password, and url.Redacted then masks
-	// nothing while a password is plainly present (issue #75). Username() returns the
-	// decoded span, so a ':' in it is exactly that case. Counting a single '@' below
-	// cannot be trusted to mean "a bare username with nothing to hide" until this is
-	// ruled out: that fallback is an exemption, and an exemption that checks less
-	// than the whole span it exempts is a leak (the lesson of issue #62).
+	// Go splits userinfo on a RAW ':' only, so an encoded separator ("%3A") is not a
+	// boundary to it (issue #75). Username() returns the decoded span, so a ':' in it
+	// is exactly that case, and it must be ruled out BEFORE either check below.
+	//
+	// Ahead of hasPassword, because an encoded separator EARLIER than the raw one Go
+	// split on means the real password starts sooner: url.Redacted then masks only
+	// the fragment after the raw ':' and echoes the rest. "admin%3Apw:x@host" masked
+	// to "admin%3Apw:xxxxx@host" and published the password.
+	//
+	// Ahead of the '@' count, because that fallback is an exemption concluding "a
+	// bare username with nothing to hide", and an exemption that checks less than
+	// the whole span it exempts is a leak (the lesson of issue #62).
 	if decodesToContain(u.User.Username(), ':') {
 		return false
+	}
+	if _, hasPassword := u.User.Password(); hasPassword {
+		return true
 	}
 	return strings.Count(host, "@") == 1
 }
@@ -670,7 +677,9 @@ func maskAuthorityPassword(host string) string {
 // "Identifies one" is the load-bearing phrase. rest spans the whole authority, so a
 // raw colon found past the credential delimiter is a port or an IPv6 literal's own
 // colon, and masking from there returns the userinfo, and the credential, verbatim.
-// That shipped once: it masked the port of every host written with one.
+// A first attempt at this function got that wrong and masked the port of any host
+// that reached it carrying one, echoing the userinfo in front. It was caught in
+// review and never shipped, but it is the reason the guard is spelled out here.
 func maskAmbiguousAuthority(prefix, rest string) string {
 	// rest spans the whole authority, so the first colon userinfoColon finds is only
 	// a username boundary when no credential delimiter precedes it. Past a delimiter
@@ -678,10 +687,28 @@ func maskAmbiguousAuthority(prefix, rest string) string {
 	// That is not hypothetical: on the issue #75 path the caller has already
 	// established the userinfo holds no raw ':', so every raw colon in rest sits
 	// after the '@' and this guard is what makes the branch fail closed at all.
-	if colon := userinfoColon(rest); colon >= 0 && !decodesToContain(rest[:colon], '@') {
-		return prefix + rest[:colon] + ":xxxxx"
+	// The span kept as the username has to be innocent on two counts. No credential
+	// delimiter may precede the colon, or the colon belongs to a port rather than to
+	// a boundary. And the searched region may hold no separator of its own under an
+	// encoding, or the span IS the credential: in "admin%3Apw:x@host" everything
+	// before the raw ':' is the real user and password.
+	//
+	// The second check covers rest[from:colon], not rest[:colon], because a bracketed
+	// literal skipped by the search carries its own raw colons and they are part of
+	// an address, not a boundary.
+	from, ok := userinfoSearchStart(rest)
+	if !ok {
+		return prefix + "xxxxx"
 	}
-	return prefix + "xxxxx"
+	colon := strings.IndexByte(rest[from:], ':')
+	if colon < 0 {
+		return prefix + "xxxxx"
+	}
+	colon += from
+	if decodesToContain(rest[:colon], '@') || decodesToContain(rest[from:colon], ':') {
+		return prefix + "xxxxx"
+	}
+	return prefix + rest[:colon] + ":xxxxx"
 }
 
 // maxDecodeRounds bounds how many rounds of percent-decoding decodesToContain
@@ -821,9 +848,11 @@ func userinfoColon(userinfo string) int {
 //
 // It exists as a separate function because the encoded-separator search (issue #75)
 // has to cover EXACTLY the span this offset opens, no more and no less. Searching
-// the whole userinfo instead reports the address's own colons and over-masks every
-// bracketed host; searching past the raw colon instead reports a port or tail colon
-// and leaves the real credential standing in front of the mask.
+// the whole userinfo instead reads a bracketed literal's own colons as a separator,
+// so a userinfo that IS such a literal ("https://[::1]@host") gets masked away for
+// nothing; searching past the raw colon instead reports a port or tail colon and
+// leaves the real credential standing in front of the mask. An ordinary bracketed
+// HOST is not affected either way, since it never reaches here as userinfo.
 func userinfoSearchStart(userinfo string) (from int, ok bool) {
 	if !strings.HasPrefix(userinfo, "[") {
 		return 0, true

@@ -510,6 +510,21 @@ func TestSafeHost(t *testing.T) {
 		// secret at all; masking them would drop a hostname to hide nothing.
 		{"leaves a digit-encoded @ with no separator unchanged", "https://example.com/path/%25%34%30", "https://example.com/path/%25%34%30"},
 		{"leaves a path nested past the decode bound unchanged", "https://centreon.example.com/100%25252525", "https://centreon.example.com/100%25252525"},
+		// An encoded separator in the USERNAME moves the real boundary earlier than the
+		// raw one Go split on, so url.Redacted masks only the fragment after the raw
+		// ':' and echoes everything before it. redactedCoversCredential returned true
+		// on hasPassword before consulting the encoded-separator guard at all, which
+		// made this the last reachable shape of the family: validateHostScheme accepts
+		// it, so it runs normally and reaches a log on every line.
+		{"fails closed on an encoded separator ahead of a raw one", "https://admin%3Asekret:x@centreon.example.com", "https://xxxxx"},
+		{"fails closed on an encoded separator ahead of a raw one behind a port", "https://admin%3Asekret:x@centreon.example.com:8443", "https://xxxxx"},
+		// Pins the region the encoded-separator search covers. Widening it to the whole
+		// userinfo makes a bracketed literal's own colons read as a separator and masks
+		// this to "https://xxxxx", which is why the search starts past the bracket.
+		// Without this row that narrowing is unpinned and the whole suite stays green
+		// when it is reverted.
+		{"leaves a bracketed IPv6 userinfo with no separator unchanged", "https://[::1]@centreon.example.com", "https://[::1]@centreon.example.com"},
+		{"leaves a bracketed IPv6 userinfo with a port and no separator unchanged", "https://[2001:db8::1]@centreon.example.com", "https://[2001:db8::1]@centreon.example.com"},
 		// Control isolating the cause to the colon: encoding a character in the
 		// USERNAME changes nothing, because the separator is still raw.
 		{"masks normally when only a username character is encoded", "https://ad%6Din:sekret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
@@ -948,6 +963,12 @@ func credentialHostGridSeparated(sep, join string) []string {
 		passwordFragment + "/" + passwordMarker, passwordFragment + "?" + passwordMarker,
 		passwordFragment + "#" + passwordMarker, passwordMarker + "/" + passwordFragment,
 		"p@" + passwordFragment + passwordMarker,
+		// Fragment before a RAW ':', marker after it. Combined with an encoded
+		// separator this is the only shape that exposes the last #75 family: Go splits
+		// on the raw colon, so url.Redacted masks the marker and echoes everything in
+		// front of it, and a marker-only assertion sees a correctly redacted string.
+		// Without this row the 238464-row sweep passes while the password leaks.
+		passwordFragment + ":" + passwordMarker,
 	}
 	hosts := credentialGridHosts
 	tails := []string{"", "/mon", "?q=1", "#f", "/a@b", "/d:" + passwordMarker + "@f"}
