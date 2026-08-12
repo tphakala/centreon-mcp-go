@@ -520,11 +520,16 @@ func TestSafeHost(t *testing.T) {
 		{"fails closed on an encoded separator ahead of a raw one behind a port", "https://admin%3Asekret:x@centreon.example.com:8443", "https://xxxxx"},
 		// Pins the region the encoded-separator search covers. Widening it to the whole
 		// userinfo makes a bracketed literal's own colons read as a separator and masks
-		// this to "https://xxxxx", which is why the search starts past the bracket.
-		// Without this row that narrowing is unpinned and the whole suite stays green
-		// when it is reverted.
+		// these to "https://xxxxx", which is why the search starts past the bracket.
+		// Four pre-existing bracketed rows also fail under that widening, so these are
+		// the direct statement of the invariant rather than its only guard.
 		{"leaves a bracketed IPv6 userinfo with no separator unchanged", "https://[::1]@centreon.example.com", "https://[::1]@centreon.example.com"},
-		{"leaves a bracketed IPv6 userinfo with a port and no separator unchanged", "https://[2001:db8::1]@centreon.example.com", "https://[2001:db8::1]@centreon.example.com"},
+		{"leaves a longer bracketed IPv6 userinfo with no separator unchanged", "https://[2001:db8::1]@centreon.example.com", "https://[2001:db8::1]@centreon.example.com"},
+		// Pins the delimiter half of maskAmbiguousAuthority's guard, which the rest of
+		// the suite leaves deletable: dropping it keeps the username span whenever a
+		// credential delimiter precedes the colon, which is where the port colon and
+		// the real credential both live.
+		{"fails closed on an encoded separator inside a bracketed span before a port", "https://[::1%3Asekret]@centreon.example.com:8443/x%25%34%30", "https://xxxxx"},
 		// Control isolating the cause to the colon: encoding a character in the
 		// USERNAME changes nothing, because the separator is still raw.
 		{"masks normally when only a username character is encoded", "https://ad%6Din:sekret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},

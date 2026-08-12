@@ -681,12 +681,10 @@ func maskAuthorityPassword(host string) string {
 // that reached it carrying one, echoing the userinfo in front. It was caught in
 // review and never shipped, but it is the reason the guard is spelled out here.
 func maskAmbiguousAuthority(prefix, rest string) string {
-	// rest spans the whole authority, so the first colon userinfoColon finds is only
-	// a username boundary when no credential delimiter precedes it. Past a delimiter
-	// it is the PORT colon, and masking there would return the userinfo verbatim.
-	// That is not hypothetical: on the issue #75 path the caller has already
-	// established the userinfo holds no raw ':', so every raw colon in rest sits
-	// after the '@' and this guard is what makes the branch fail closed at all.
+	// rest spans the whole authority, so the first colon found in it is only a
+	// username boundary when no credential delimiter precedes it. Past a delimiter it
+	// is the PORT colon, and masking there would return the userinfo verbatim.
+	//
 	// The span kept as the username has to be innocent on two counts. No credential
 	// delimiter may precede the colon, or the colon belongs to a port rather than to
 	// a boundary. And the searched region may hold no separator of its own under an
@@ -824,23 +822,6 @@ func unhexDigit(c byte) byte {
 	}
 }
 
-// userinfoColon returns the index of the ':' that starts the password span, or -1.
-// A leading bracketed IPv6 literal is skipped so its own colons are not mistaken
-// for the delimiter, which would otherwise mask from inside the address and leave
-// a truncated "[" where the host should be. The literal must parse as an IP, so a
-// bracket-prefixed username such as "[user:secret" still masks at its real colon.
-func userinfoColon(userinfo string) int {
-	from, ok := userinfoSearchStart(userinfo)
-	if !ok {
-		return -1
-	}
-	colon := strings.IndexByte(userinfo[from:], ':')
-	if colon < 0 {
-		return -1
-	}
-	return from + colon
-}
-
 // userinfoSearchStart returns the offset in userinfo at which a username/password
 // separator may legitimately begin, skipping a leading bracketed IP literal whose
 // own colons belong to the address rather than to a credential. ok is false when
@@ -851,8 +832,9 @@ func userinfoColon(userinfo string) int {
 // the whole userinfo instead reads a bracketed literal's own colons as a separator,
 // so a userinfo that IS such a literal ("https://[::1]@host") gets masked away for
 // nothing; searching past the raw colon instead reports a port or tail colon and
-// leaves the real credential standing in front of the mask. An ordinary bracketed
-// HOST is not affected either way, since it never reaches here as userinfo.
+// leaves the real credential standing in front of the mask. The skip is
+// load-bearing in both callers: "https://[::1]/p:pw%25%34%30host" masks to
+// "https://[::1]/p:xxxxx" with it and to "https://[:xxxxx" without.
 func userinfoSearchStart(userinfo string) (from int, ok bool) {
 	if !strings.HasPrefix(userinfo, "[") {
 		return 0, true
