@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `X-Centreon-Host` header in gateway mode) can no longer leak through an error
   value, including the mis-parsed-authority case where Go's own masking sees no
   userinfo to hide (CWE-532). (#63, #71)
+- Host-URL redaction no longer echoes a password when the userinfo boundary is
+  percent-encoded, in server logs or in the configuration errors that quote a host.
+  Two shapes leaked: a `@` delimiter whose own hex digits are encoded
+  (`%25%34%30`), and a `:` separator written `%3A`, which Go reads as part of a
+  bare username so its own masking hides nothing. The encoded `:` case is the more
+  reachable of the two, since such a host passes startup validation and runs
+  normally. It leaked through four paths, including a bracketed-IPv6 carve-out and
+  a tail search that both looked for a raw `:` only (CWE-532). (#68, #75)
 
 ### Changed
 
@@ -31,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only status and connection tools report the literal `(redacted host)`
   instead of a host name, because the authority cannot be identified without
   risking exposure of a credential. (#66)
+- A host URL whose credential boundary is only visible after percent-decoding is
+  now logged as `https://user:xxxxx`, or `https://xxxxx` when even the username
+  boundary is unreadable, instead of being logged verbatim. The host name is lost
+  in those cases because its position cannot be trusted. A URL carrying only one
+  half of a credential shape is still logged unchanged, so an encoded `@` in the
+  path of a portless host does not trigger it; note a port supplies the missing
+  `:`, so the same path behind `host:8443` is masked to `https://host:xxxxx`.
+  Configuration errors that quote a rejected host now name the parse failure
+  ("invalid port after host") instead of quoting the offending span, which is what
+  reprinted the credential; the masked host is still quoted alongside. (#68, #75)
 
 ## [1.0.0]
 

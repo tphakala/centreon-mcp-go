@@ -213,17 +213,39 @@ func gatewayMode(cfg *Config) bool {
 // that shape is indistinguishable from a mis-encoded credential, so redaction in
 // the log and the fail-closed placeholder in displayHost are the controls there,
 // not validation (issue #55).
+// urlParseReason maps a url.Parse failure to a fixed description of what was wrong.
+// It never copies a string out of the error, because Go's parse reasons quote the
+// offending span of the input, which for a host URL is the credential. The returned
+// value is always one of the constants below, so no input can reach a log through
+// it. This is the same fail-closed philosophy as internal/redact.Reason, which does
+// the job for client-call errors, applied to the one parse error that predates it.
+func urlParseReason(err error) string {
+	reason := err
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
+		reason = urlErr.Err
+	}
+	switch text := reason.Error(); {
+	case strings.HasPrefix(text, "invalid port "):
+		return "invalid port after host"
+	case strings.HasPrefix(text, "invalid URL escape "):
+		return "invalid percent-escape"
+	case strings.HasPrefix(text, "invalid character "):
+		return "invalid character in host name"
+	default:
+		return "malformed URL"
+	}
+}
+
 func validateHostScheme(host string, allowHTTP bool) error {
 	u, err := url.Parse(host)
 	if err != nil {
 		// url.Error.Error() embeds the URL it failed on, so wrapping err directly
 		// would reprint the raw credential that safeHost just masked in the same
-		// message (CWE-532). Wrap only the reason.
-		reason := err
-		if urlErr, ok := errors.AsType[*url.Error](err); ok {
-			reason = urlErr.Err
-		}
-		return fmt.Errorf("invalid host url %q: %w", safeHost(host), reason)
+		// message (CWE-532). Unwrapping one layer is not enough: Go's own reason for
+		// a mis-parsed authority is `invalid port ":<password>" after host`, which
+		// quotes the credential too, so the masked host and the password shipped in
+		// the same log line. Classify instead of quoting.
+		return fmt.Errorf("invalid host url %q: %s", safeHost(host), urlParseReason(err))
 	}
 	switch u.Scheme {
 	case schemeHTTPS, schemeHTTP:
@@ -273,6 +295,22 @@ func validateHostScheme(host string, allowHTTP bool) error {
 // with no password at all, and safeHost never masks a username. A "//" anywhere
 // else in the password, including the realistic base64 case, is handled. RFC 3986
 // requires percent-encoding these characters in userinfo.
+//
+// Where a credential is present but its boundary is only visible after decoding,
+// safeHost fails closed and drops the host rather than echo the input: a delimiter
+// whose hex digits are encoded (issue #68) and an encoded ':' separator, which Go
+// reads as a bare username so url.Redacted masks nothing (issue #75).
+//
+// That rule is not an absolute, and the exceptions are the interesting part. A
+// credential needs BOTH a delimiter and a separator, so an input carrying only one
+// of them is left intact: "https://host/path/%25%34%30" decodes to a '@' and hides
+// nothing. The username is kept when a raw colon marks where the password starts,
+// giving "https://admin:xxxxx" instead of "https://xxxxx"; that is the usual shape
+// for issue #68, while issue #75 mostly loses the username too, since an encoded
+// separator is exactly the case where no raw colon marks the boundary. And the
+// bounded decode reports exhaustion as uncertainty rather
+// than as a finding, so an ordinary path nested deeper than maxDecodeRounds is left
+// alone unless something else in the input actually looks like a credential.
 func safeHost(host string) string {
 	if u, err := url.Parse(host); err == nil {
 		if u.User != nil {
@@ -296,19 +334,37 @@ func safeHost(host string) string {
 			return host
 		}
 	}
-	// The scheme-less user:pass@host form parses as scheme:opaque, so reparse it as
-	// an authority. Only the single-'@' form with no further at sign after the
-	// delimiter is unambiguous enough to trust: a second '@' (raw, or percent-encoded
-	// as %40 in the tail) means the reparse would invent an authority out of
-	// "scheme:user" or mask the wrong span and leave the real password in place, so
-	// those fall through to the textual masker instead (issues #55, #62).
-	if strings.Count(host, "@") == 1 {
-		if u, err := url.Parse("//" + host); err == nil && u.User != nil &&
-			!tailCarriesAtSign(afterAuthorityDelimiter(host)) {
-			return strings.TrimPrefix(u.Redacted(), "//")
-		}
+	// The scheme-less user:pass@host form parses as scheme:opaque, so it needs a
+	// reparse; anything the reparse cannot read unambiguously falls through to the
+	// textual masker below.
+	if masked, ok := reparsedAuthority(host); ok {
+		return masked
 	}
 	return maskAuthorityPassword(host)
+}
+
+// reparsedAuthority masks the scheme-less user:pass@host form, which url.Parse
+// reads as scheme:opaque and so exposes no userinfo to mask. It reports false when
+// the form is too ambiguous to trust, leaving the caller on the textual masker.
+//
+// Only the single-'@' form with no further at sign after the delimiter is
+// unambiguous enough: a second '@' (raw, or percent-encoded as %40 in the tail)
+// means the reparse would invent an authority out of "scheme:user" or mask the
+// wrong span and leave the real password in place (issues #55, #62). The
+// encoded-separator check is the one redactedCoversCredential makes, for the same
+// reason: this hands the string to url.Redacted, which masks nothing when Go read
+// the userinfo as a bare username because its ':' was percent-encoded (issue #75).
+func reparsedAuthority(host string) (string, bool) {
+	if strings.Count(host, "@") != 1 {
+		return "", false
+	}
+	u, err := url.Parse("//" + host)
+	if err != nil || u.User == nil ||
+		tailCarriesAtSign(afterAuthorityDelimiter(host)) ||
+		decodesToContain(u.User.Username(), ':') {
+		return "", false
+	}
+	return strings.TrimPrefix(u.Redacted(), "//"), true
 }
 
 // redactedCoversCredential reports whether url.Redacted masks the whole credential
@@ -321,6 +377,21 @@ func safeHost(host string) string {
 // password it parsed, and never looks past the authority it chose.
 func redactedCoversCredential(u *url.URL, host string) bool {
 	if tailCarriesAtSign(afterAuthorityDelimiter(host)) {
+		return false
+	}
+	// Go splits userinfo on a RAW ':' only, so an encoded separator ("%3A") is not a
+	// boundary to it (issue #75). Username() returns the decoded span, so a ':' in it
+	// is exactly that case, and it must be ruled out BEFORE either check below.
+	//
+	// Ahead of hasPassword, because an encoded separator EARLIER than the raw one Go
+	// split on means the real password starts sooner: url.Redacted then masks only
+	// the fragment after the raw ':' and echoes the rest. "admin%3Apw:x@host" masked
+	// to "admin%3Apw:xxxxx@host" and published the password.
+	//
+	// Ahead of the '@' count, because that fallback is an exemption concluding "a
+	// bare username with nothing to hide", and an exemption that checks less than
+	// the whole span it exempts is a leak (the lesson of issue #62).
+	if decodesToContain(u.User.Username(), ':') {
 		return false
 	}
 	if _, hasPassword := u.User.Password(); hasPassword {
@@ -412,7 +483,18 @@ func isURLScheme(s string) bool {
 func tailCarriesPassword(host string) bool {
 	tail := authorityTail(host)
 	at := lastAtDelimiter(tail)
-	return at >= 0 && strings.IndexByte(tail[:at], ':') >= 0
+	if at < 0 {
+		// lastAtDelimiter cannot see a delimiter whose hex digits are encoded, so the
+		// bracketed-authority carve-out above used to return such an input verbatim
+		// (issue #68). The position is unknown here, so ask only whether a separator
+		// is positively present anywhere in the tail.
+		sep, _ := decodesToTarget(tail, ':')
+		return decodesToContain(tail, '@') && sep
+	}
+	// The separator is sought in every encoding, not just raw. A raw IndexByte here
+	// let the same carve-out return an input verbatim whenever the tail's ':' was
+	// written "%3A", the hazard the masker itself was fixed for (issue #75).
+	return decodesToContain(tail[:at], ':')
 }
 
 // redactedHostPlaceholder is the fail-closed display value for a host whose
@@ -486,7 +568,11 @@ func displayHost(host string) string {
 // Note "%4c" is a valid escape for 'L', so a tail like "/pw%4chost" holds no
 // delimiter in any encoding and is trusted too.
 func tailCarriesAtSign(tail string) bool {
-	for range 4 {
+	// Shares maxDecodeRounds with decodesToContain so the routing guards and the
+	// textual masker agree on how deep a delimiter may hide. The bound used to be a
+	// bare literal here while the constant's doc claimed they matched, which nothing
+	// enforced: changing one silently desynchronised the two.
+	for range maxDecodeRounds {
 		if strings.ContainsRune(tail, '@') {
 			return true
 		}
@@ -508,60 +594,274 @@ func tailCarriesAtSign(tail string) bool {
 // path, query or fragment (issue #55). It masks the span from the first ':' after
 // the authority marker to the delimiter '@', found by lastAtDelimiter so a
 // percent-encoded delimiter (%40) is located too (issue #62). A string with no
-// delimiter, or with no ':' before it, has no password span and is returned
-// unchanged. The encoded delimiter is kept verbatim in the output, so the host
-// after it still greps.
+// delimiter, or with no ':' before it in any encoding, has no password span and is
+// returned unchanged. The encoded delimiter is kept verbatim in the output, so the
+// host after it still greps.
+//
+// Two shapes cannot be masked in place and fail closed through
+// maskAmbiguousAuthority instead: a delimiter whose hex digits are themselves
+// encoded (issue #68), and a userinfo whose ':' separator is encoded (issue #75).
+// Both are locatable only after decoding, and mapping a decoded offset back through
+// every round is not worth the complexity, so the position is given up rather than
+// reconstructed. Note the two differ in reachability: validateHostScheme rejects
+// the #68 shapes outright, so in env mode only a caller-supplied X-Centreon-Host
+// header produces them, while it ACCEPTS "https://admin%3Apw@host", which therefore
+// runs normally and reaches a log on every line.
 func maskAuthorityPassword(host string) string {
 	rest, prefix := host, ""
 	if k := authorityMarker(rest); k >= 0 {
 		prefix, rest = rest[:k], rest[k:]
 	}
 	at := lastAtDelimiter(rest)
+	// lastAtDelimiter sees a raw '@' and the flat %(25)*40 shape. It cannot see a
+	// delimiter whose own hex digits are encoded ("%25%34%30" decodes to "%40" and
+	// then to '@'), and such a delimiter can sit AFTER the one it did find, leaving
+	// the span between them standing as password material (issue #68). Its position
+	// is only recoverable by mapping an offset back through every decode round, so
+	// this fails closed instead and masks from the userinfo separator.
+	//
+	// A delimiter alone is not a credential. Requiring a separator too is what keeps
+	// an ordinary URL intact: "https://host/path/%25%34%30" decodes to a '@' and
+	// holds no secret, and decodesToContain deliberately fails closed once its round
+	// bound runs out, which "https://host/100%25252525" reaches with no '@' at all.
+	// Masking either of those would drop a hostname an operator needs, to hide
+	// nothing.
+	deeper := rest
+	if at >= 0 {
+		deeper = rest[at+1:]
+	}
+	if decodesToContain(deeper, '@') {
+		// The separator must be positively found, not merely possible: ambiguity is
+		// not evidence, and the two searches exhaust the round bound together on a
+		// deeply nested path that holds neither character.
+		if sep, _ := decodesToTarget(rest, ':'); !sep {
+			return host // a delimiter but no separator, so no password span
+		}
+		return maskAmbiguousAuthority(prefix, rest)
+	}
 	if at < 0 {
 		return host // no userinfo
 	}
+	// The separator can itself be percent-encoded ("%3A"), in which case Go parsed a
+	// bare username and url.Redacted masked nothing (issue #75). Search for it over
+	// EXACTLY the span the raw search covers: past a leading bracketed IP literal,
+	// whose own colons belong to the address, and ahead of the first raw colon,
+	// because a colon after it is a port or tail colon and masking there would leave
+	// the real credential standing in front of the mask.
 	userinfo := rest[:at]
-	colon := userinfoColon(userinfo)
+	from, ok := userinfoSearchStart(userinfo)
+	if !ok {
+		return host // the userinfo is a bare bracketed IP literal, so no password span
+	}
+	searched := userinfo[from:]
+	colon := strings.IndexByte(searched, ':')
+	encoded := searched
+	if colon >= 0 {
+		encoded = searched[:colon]
+	}
+	if decodesToContain(encoded, ':') {
+		return maskAmbiguousAuthority(prefix, rest)
+	}
 	if colon < 0 {
 		return host // no ':' before the delimiter, so there is no password span
 	}
-	return prefix + userinfo[:colon] + ":xxxxx" + rest[at:]
+	return prefix + userinfo[:from+colon] + ":xxxxx" + rest[at:]
 }
 
-// userinfoColon returns the index of the ':' that starts the password span, or -1.
-// A leading bracketed IPv6 literal is skipped so its own colons are not mistaken
-// for the delimiter, which would otherwise mask from inside the address and leave
-// a truncated "[" where the host should be. The literal must parse as an IP, so a
-// bracket-prefixed username such as "[user:secret" still masks at its real colon.
-func userinfoColon(userinfo string) int {
-	from := 0
-	if strings.HasPrefix(userinfo, "[") {
-		if end := strings.IndexByte(userinfo, ']'); end > 0 {
-			literal := userinfo[1:end]
-			// A zone ID ("%25eth0" once percent-encoded) is not part of the address.
-			if pct := strings.IndexByte(literal, '%'); pct >= 0 {
-				literal = literal[:pct]
-			}
-			if net.ParseIP(literal) != nil {
-				from = end + 1
-			}
-		} else if net.ParseIP(userinfo[1:]) != nil {
-			// No closing ']': the delimiter the caller found sits inside the bracket
-			// because url.Parse rejected the authority (an invalid '%40' zone lands
-			// here, issue #62) and the ']' fell past it. Only when the ENTIRE span
-			// after '[' is a valid IP is it the host literal with no password to mask,
-			// so return -1. net.ParseIP rejects a zone or a ':' after the address, so a
-			// span like "[192.168.0.1%x:secret" is NOT taken as bare host: it falls
-			// through and its ':secret' is masked below. (Stripping at '%' first would
-			// misread that as a zoned address and leak the password.)
-			return -1
+// maskAmbiguousAuthority masks from the password span to the end of the input, for
+// the case where a credential is present but its delimiter cannot be located in the
+// original bytes. A username is not a secret and keeps the line greppable, so it is
+// preserved when a raw colon identifies one; when even the colon is visible only
+// after decoding, there is no trustworthy boundary and the whole authority goes.
+//
+// "Identifies one" is the load-bearing phrase. rest spans the whole authority, so a
+// raw colon found past the credential delimiter is a port or an IPv6 literal's own
+// colon, and masking from there returns the userinfo, and the credential, verbatim.
+// A first attempt at this function got that wrong and masked the port of any host
+// that reached it carrying one, echoing the userinfo in front. It was caught in
+// review and never shipped, but it is the reason the guard is spelled out here.
+func maskAmbiguousAuthority(prefix, rest string) string {
+	// rest spans the whole authority, so the first colon found in it is only a
+	// username boundary when no credential delimiter precedes it. Past a delimiter it
+	// is the PORT colon, and masking there would return the userinfo verbatim.
+	//
+	// The span kept as the username has to be innocent on two counts. No credential
+	// delimiter may precede the colon, or the colon belongs to a port rather than to
+	// a boundary. And the searched region may hold no separator of its own under an
+	// encoding, or the span IS the credential: in "admin%3Apw:x@host" everything
+	// before the raw ':' is the real user and password.
+	//
+	// The second check covers rest[from:colon], not rest[:colon], because a bracketed
+	// literal skipped by the search carries its own raw colons and they are part of
+	// an address, not a boundary.
+	from, ok := userinfoSearchStart(rest)
+	if !ok {
+		return prefix + "xxxxx"
+	}
+	colon := strings.IndexByte(rest[from:], ':')
+	if colon < 0 {
+		return prefix + "xxxxx"
+	}
+	colon += from
+	if decodesToContain(rest[:colon], '@') || decodesToContain(rest[from:colon], ':') {
+		return prefix + "xxxxx"
+	}
+	return prefix + rest[:colon] + ":xxxxx"
+}
+
+// maxDecodeRounds bounds how many rounds of percent-decoding decodesToContain
+// follows before giving up. It matches the bound in tailCarriesAtSign so the
+// routing guards and the textual masker agree on how deep a delimiter may hide
+// before an input is treated as ambiguous.
+const maxDecodeRounds = 4
+
+// decodesToContain reports whether s decodes to a string containing target within
+// maxDecodeRounds rounds of decodeLenient. It fails closed, returning true, when
+// the rounds run out while decoding is still making progress, because target could
+// be hiding under another layer. Decoding that stops making progress is complete,
+// so a string whose remaining escapes are undecodable (a "%zz" typo in a path) is
+// answered from its decoded form rather than being treated as suspicious.
+//
+// Allocation is bounded at maxDecodeRounds strings of at most len(s) bytes each,
+// independent of how deeply the input nests. Peeling one layer per candidate
+// position instead was measured at 1.15GB per call on a 64KB nested input, so the
+// bound is deliberately on rounds rather than on layers (issue #62).
+func decodesToContain(s string, target byte) bool {
+	found, ambiguous := decodesToTarget(s, target)
+	return found || ambiguous
+}
+
+// decodesToTarget is decodesToContain with its two reasons kept apart: found means
+// target actually appeared within the bound, ambiguous means the rounds ran out
+// while decoding was still making progress, so target could be hiding deeper.
+//
+// The distinction matters wherever ambiguity alone must not drive a decision. A
+// credential needs both a delimiter and a separator, and a deeply nested but
+// perfectly ordinary path ("/100%25252525") exhausts the bound on BOTH searches at
+// once, so treating ambiguity as evidence for each of them in turn would destroy
+// the hostname to hide nothing.
+func decodesToTarget(s string, target byte) (found, ambiguous bool) {
+	for range maxDecodeRounds {
+		if strings.IndexByte(s, target) >= 0 {
+			return true, false
+		}
+		next := decodeLenient(s)
+		if next == s {
+			return false, false // decoding is complete and target never appeared
+		}
+		s = next
+	}
+	return false, true
+}
+
+// decodeLenient applies one round of percent-decoding to s. An escape that is not
+// '%' followed by two hex digits is left as a literal '%' and scanning continues
+// past it. url.PathUnescape cannot serve here because it rejects the whole string
+// on the first bad escape, which would let a "%zz" typo anywhere in a URL hide a
+// credential delimiter elsewhere in it. s is returned unchanged, without
+// allocating, when it holds nothing decodable.
+// Literal runs between escapes are copied whole rather than a byte at a time, and
+// decoding starts at the first escape rather than rescanning the prefix the search
+// already walked. In gateway mode the input is a caller-supplied header, so this is
+// the difference between copying at memmove speed and at one call per byte on an
+// input an attacker chooses the length of.
+func decodeLenient(s string) string {
+	first := firstEscape(s)
+	if first < 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	run := 0
+	for i := first; i < len(s); {
+		if isEscapeAt(s, i) {
+			b.WriteString(s[run:i])
+			b.WriteByte(unhexDigit(s[i+1])<<4 | unhexDigit(s[i+2]))
+			i += 3
+			run = i
+			continue
+		}
+		i++
+	}
+	b.WriteString(s[run:])
+	return b.String()
+}
+
+// firstEscape returns the index of the first '%' followed by two hex digits, which
+// is what decodeLenient rewrites, or -1 when s holds none.
+func firstEscape(s string) int {
+	for i := range len(s) {
+		if isEscapeAt(s, i) {
+			return i
 		}
 	}
-	colon := strings.IndexByte(userinfo[from:], ':')
-	if colon < 0 {
-		return -1
+	return -1
+}
+
+// isEscapeAt reports whether a well-formed percent-escape starts at s[i].
+func isEscapeAt(s string, i int) bool {
+	return s[i] == '%' && i+2 < len(s) && isHexDigit(s[i+1]) && isHexDigit(s[i+2])
+}
+
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+// decimalDigits is how many digit characters precede 'a' and 'A' in the hex
+// alphabet, so a letter's value is its distance from that letter plus this.
+const decimalDigits = 10
+
+func unhexDigit(c byte) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0'
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + decimalDigits
+	default:
+		return c - 'A' + decimalDigits
 	}
-	return from + colon
+}
+
+// userinfoSearchStart returns the offset in userinfo at which a username/password
+// separator may legitimately begin, skipping a leading bracketed IP literal whose
+// own colons belong to the address rather than to a credential. ok is false when
+// the whole span is such a literal, which carries no password span at all.
+//
+// It exists as a separate function because the encoded-separator search (issue #75)
+// has to cover EXACTLY the span this offset opens, no more and no less. Searching
+// the whole userinfo instead reads a bracketed literal's own colons as a separator,
+// so a userinfo that IS such a literal ("https://[::1]@host") gets masked away for
+// nothing; searching past the raw colon instead reports a port or tail colon and
+// leaves the real credential standing in front of the mask. The skip is
+// load-bearing in both callers: "https://[::1]/p:pw%25%34%30host" masks to
+// "https://[::1]/p:xxxxx" with it and to "https://[:xxxxx" without.
+func userinfoSearchStart(userinfo string) (from int, ok bool) {
+	if !strings.HasPrefix(userinfo, "[") {
+		return 0, true
+	}
+	if end := strings.IndexByte(userinfo, ']'); end > 0 {
+		literal := userinfo[1:end]
+		// A zone ID ("%25eth0" once percent-encoded) is not part of the address.
+		if pct := strings.IndexByte(literal, '%'); pct >= 0 {
+			literal = literal[:pct]
+		}
+		if net.ParseIP(literal) != nil {
+			return end + 1, true
+		}
+		return 0, true
+	}
+	if net.ParseIP(userinfo[1:]) != nil {
+		// No closing ']': the delimiter the caller found sits inside the bracket
+		// because url.Parse rejected the authority (an invalid '%40' zone lands
+		// here, issue #62) and the ']' fell past it. Only when the ENTIRE span
+		// after '[' is a valid IP is it the host literal with no password to mask.
+		// net.ParseIP rejects a zone or a ':' after the address, so a span like
+		// "[192.168.0.1%x:secret" is NOT taken as bare host: it falls through and
+		// its ':secret' is masked. (Stripping at '%' first would misread that as a
+		// zoned address and leak the password.)
+		return 0, false
+	}
+	return 0, true
 }
 
 // lastAtDelimiter returns the index in s of the position that acts as the
@@ -572,6 +872,12 @@ func userinfoColon(userinfo string) int {
 // dangerous case a raw search misses (the hybrid "admin:p@ssword%40host", issue
 // #62). Escapes that do not provably decode to '@' (a malformed "%zz", or "%4c" for
 // 'L') are not delimiters, so an ordinary encoded path is left intact.
+//
+// This scan is deliberately incomplete. It recognises only the shape whose hex
+// digits stay literal, because that one can be matched in place, allocation-free,
+// at any depth. A delimiter whose digits are themselves encoded ("%25%34%30",
+// issue #68) is invisible here; callers pair this with decodesToContain, which
+// answers whether such a delimiter exists but not where, and so fails closed.
 func lastAtDelimiter(s string) int {
 	at := strings.LastIndexByte(s, '@')
 	for i := len(s) - 1; i > at; i-- {
