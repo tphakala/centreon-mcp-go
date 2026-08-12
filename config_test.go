@@ -510,6 +510,19 @@ func TestSafeHost(t *testing.T) {
 		// secret at all; masking them would drop a hostname to hide nothing.
 		{"leaves a digit-encoded @ with no separator unchanged", "https://example.com/path/%25%34%30", "https://example.com/path/%25%34%30"},
 		{"leaves a path nested past the decode bound unchanged", "https://centreon.example.com/100%25252525", "https://centreon.example.com/100%25252525"},
+		// The accepted cost of that bound. Nesting past maxDecodeRounds is reported as
+		// uncertainty, and combined with a ':' anywhere ahead of it the input is
+		// indistinguishable from a credential whose delimiter is hiding deeper, so it
+		// is masked. No secret is exposed; the operator loses the tail. This row exists
+		// to make the trade deliberate rather than incidental.
+		{"masks a credential-free URL whose only colon precedes an over-nested escape", "https://example.com/p:%25252525", "https://example.com/p:xxxxx"},
+		// And the reason the separator search cannot simply be narrowed to the
+		// authority to avoid that cost. Here the ':' is ALSO only in the path, the
+		// delimiter is again reachable only by decoding past the bound, and the input
+		// IS a credential: url.Parse mis-reads "user:pass" spanning a '/' (issue #55),
+		// which is why the search spans the whole post-marker string. Restricting it to
+		// the authority would return this verbatim and leak the password.
+		{"masks a mis-parsed credential whose colon is only in the path", "https://x/admin:pw%25252525%25252534%25252530host", "https://x/admin:xxxxx"},
 		// An encoded separator in the USERNAME moves the real boundary earlier than the
 		// raw one Go split on, so url.Redacted masks only the fragment after the raw
 		// ':' and echoes everything before it. redactedCoversCredential returned true
