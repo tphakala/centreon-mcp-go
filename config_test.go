@@ -482,6 +482,34 @@ func TestSafeHost(t *testing.T) {
 		{"fails closed on an encoded userinfo colon with an encoded delimiter", "https://admin%3Asekret%40centreon.example.com", "https://xxxxx"},
 		{"fails closed on a lowercase encoded userinfo colon", "https://admin%3asekret@centreon.example.com", "https://xxxxx"},
 		{"fails closed on the scheme-less encoded-colon form", "admin%3Asekret@centreon.example.com", "xxxxx"},
+		// The same shapes behind an explicit port and behind a bracketed IPv6 literal.
+		// These are the mainstream deployment, not a corner case, and the first fix for
+		// #75 missed them: maskAmbiguousAuthority located the username boundary with
+		// userinfoColon over the WHOLE post-marker span, and on this path the userinfo
+		// carries no raw ':' by construction, so the first raw colon it found was the
+		// PORT colon. It masked the port and returned the credential verbatim. Every
+		// row above uses a portless host, which is exactly why the gap survived.
+		{"fails closed on an encoded userinfo colon behind a port", "https://admin%3Asekret@centreon.example.com:8443", "https://xxxxx"},
+		{"fails closed on an encoded userinfo colon behind a port with an encoded delimiter", "https://admin%3Asekret%40centreon.example.com:8443", "https://xxxxx"},
+		{"fails closed on the scheme-less encoded-colon form behind a port", "admin%3Asekret@centreon.example.com:8443", "xxxxx"},
+		{"fails closed on an encoded userinfo colon before a bracketed IPv6 host", "https://uzer%3Asekret@[::1]", "https://xxxxx"},
+		{"fails closed on an encoded userinfo colon before a bracketed IPv6 host with a port", "https://uzer%3Asekret@[2001:db8::1]:8443", "https://xxxxx"},
+		// A raw ':' inside a bracketed literal must not disarm the encoded-separator
+		// check. userinfoColon deliberately reports no separator for a bracketed
+		// reading, so gating that check on "the userinfo holds no raw ':'" exempted
+		// exactly the inputs whose colons belong to an address, and they leaked.
+		{"fails closed on an encoded colon after a bracketed literal", "https://[::1]%3Asekret@centreon.example.com", "https://xxxxx"},
+		{"fails closed on an encoded colon after a bracketed link-local literal", "https://[fe80::1]%3Asekret@centreon.example.com", "https://xxxxx"},
+		// The bracketed-authority carve-out reaches its verdict through
+		// tailCarriesPassword, which searched the tail for a RAW ':' and could not see
+		// a delimiter whose digits were encoded. Both spellings must defeat it.
+		{"masks an encoded colon in the tail of a bracketed authority", "https://[::1]/admin%3Asekret@centreon.example.com", "https://xxxxx"},
+		{"masks a digit-encoded delimiter in the tail of a bracketed authority", "https://[::1]/p:sekret%25%34%30centreon.example.com", "https://[::1]/p:xxxxx"},
+		// A delimiter without a separator is not a credential. These carry a '@' that
+		// only decoding reveals, or exhaust the decode bound outright, and hold no
+		// secret at all; masking them would drop a hostname to hide nothing.
+		{"leaves a digit-encoded @ with no separator unchanged", "https://example.com/path/%25%34%30", "https://example.com/path/%25%34%30"},
+		{"leaves a path nested past the decode bound unchanged", "https://centreon.example.com/100%25252525", "https://centreon.example.com/100%25252525"},
 		// Control isolating the cause to the colon: encoding a character in the
 		// USERNAME changes nothing, because the separator is still raw.
 		{"masks normally when only a username character is encoded", "https://ad%6Din:sekret@centreon.example.com", "https://admin:xxxxx@centreon.example.com"},
@@ -559,23 +587,44 @@ func TestSafeHost(t *testing.T) {
 // not the reason.
 func TestSafeHostNeverLeaksPassword(t *testing.T) {
 	t.Parallel()
-	grid := credentialHostGrid()
-	// Without this the whole test passes vacuously if the builder ever returns
-	// nothing, which is the failure mode a pure absence assertion cannot see.
-	if len(grid) < 1000 {
-		t.Fatalf("credentialHostGrid() returned %d hosts, expected a full grid", len(grid))
+	// Each family is asserted to contribute rows BEFORE being swept. Checking only
+	// the first builder's length, as this test used to, left every later family free
+	// to contribute nothing while the absence assertion still reported success: a
+	// vacuous pass is exactly the failure mode a pure absence assertion cannot see,
+	// and appending to an already-large slice hides it.
+	families := []struct {
+		name string
+		rows []string
+	}{
+		// The raw '@' credential form, and the percent-encoded delimiter of issue #62
+		// once and twice encoded. The encoded ones carry no raw '@' at all, so before
+		// that fix safeHost either returned them unchanged or masked to a non-existent
+		// raw '@'. The display test deliberately does not get the encoded joins.
+		{"raw @ delimiter", credentialHostGrid()},
+		{"%40 delimiter", credentialHostGridJoined("%40")},
+		{"%2540 delimiter", credentialHostGridJoined("%2540")},
+		// Issue #68: the delimiter's hex digits themselves encoded, whole and partial.
+		// Neither matches the flat %(25)*40 shape, so the masker found no delimiter.
+		{"%25%34%30 delimiter", credentialHostGridJoined("%25%34%30")},
+		{"%254%30 delimiter", credentialHostGridJoined("%254%30")},
+		// Issue #75: the userinfo SEPARATOR encoded. Go splits userinfo on a raw ':'
+		// only, so these parse as a bare username with no password and url.Redacted
+		// masks nothing. Swept with both delimiter spellings and with the separator
+		// nested twice, because the guards for this family are spelled three different
+		// ways across maskAuthorityPassword, redactedCoversCredential and
+		// reparsedAuthority. credentialGridHosts supplies the ports and bracketed IPv6
+		// literals that the hand-written rows for this family originally all missed.
+		{"%3A separator", credentialHostGridSeparated("%3A", "@")},
+		{"%3A separator, %40 delimiter", credentialHostGridSeparated("%3A", "%40")},
+		{"%253A separator", credentialHostGridSeparated("%253A", "@")},
 	}
-	// Also sweep the percent-encoded delimiter (issue #62 family 2), once and twice
-	// encoded. These inputs carry no raw '@', so before the fix safeHost either
-	// returned them unchanged or masked to a non-existent raw '@'; the marker
-	// survived. The display test does not get these joins, see its note.
-	grid = append(grid, credentialHostGridJoined("%40")...)
-	grid = append(grid, credentialHostGridJoined("%2540")...)
-	// Issue #68: the delimiter's hex digits themselves percent-encoded, whole and
-	// partial. Neither carries a raw '@' nor matches the flat %(25)*40 shape, so
-	// before the fix the masker found no delimiter at all and returned the input.
-	grid = append(grid, credentialHostGridJoined("%25%34%30")...)
-	grid = append(grid, credentialHostGridJoined("%254%30")...)
+	var grid []string
+	for _, f := range families {
+		if len(f.rows) < 1000 {
+			t.Fatalf("family %q contributed %d hosts, expected a full grid", f.name, len(f.rows))
+		}
+		grid = append(grid, f.rows...)
+	}
 
 	fragmentRows := 0
 	failures := 0
@@ -729,8 +778,13 @@ func TestRedactedHostPlaceholderLiteral(t *testing.T) {
 // flake it. Replacing maxDecodeRounds in decodesToContain with an unbounded loop is
 // the change this is meant to catch, and doing so measures 17632x (1.156GB on a
 // 64KB input), reproducing the issue #62 figure almost exactly.
+// Deliberately NOT t.Parallel: testing.Benchmark derives AllocedBytesPerOp from
+// process-wide runtime.MemStats deltas, so every allocation a concurrently running
+// parallel test makes inside the benchmark window is charged to this one. Measured
+// under the CI command (go test -race ./...) with t.Parallel on, the ratio rose
+// from 7.9x to 15.5x against the 20x bound, which a slower runner would push over.
+// Serial, it measures 7.88x with no run-to-run spread.
 func TestSafeHostBoundsAllocationOnNestedEscapes(t *testing.T) {
-	t.Parallel()
 	cases := []struct {
 		name string
 		host string
@@ -746,7 +800,6 @@ func TestSafeHostBoundsAllocationOnNestedEscapes(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			var got string
 			//nolint:thelper // this is the benchmark body itself, not a helper.
 			res := testing.Benchmark(func(b *testing.B) {
@@ -769,6 +822,47 @@ func TestSafeHostBoundsAllocationOnNestedEscapes(t *testing.T) {
 					float64(res.AllocedBytesPerOp())/float64(len(tt.host)), limit)
 			}
 		})
+	}
+}
+
+// TestValidateHostSchemeErrorsNeverEchoACredential pins that a REJECTION message
+// cannot reprint the credential it is rejecting. Every message already quotes
+// safeHost's masked form, but Go's own parse reason quotes the offending span too
+// ("invalid port \":<password>\" after host"), so unwrapping one layer and
+// formatting it put the password back into the very sentence that had just masked
+// it (CWE-532). The messages reach a log at main.go for CENTREON_HOST and at the
+// gateway host-rejected line for a caller-supplied X-Centreon-Host header.
+func TestValidateHostSchemeErrorsNeverEchoACredential(t *testing.T) {
+	t.Parallel()
+	grid := credentialHostGrid()
+	grid = append(grid, credentialHostGridJoined("%40")...)
+	grid = append(grid, credentialHostGridJoined("%25%34%30")...)
+	grid = append(grid, credentialHostGridSeparated("%3A", "@")...)
+	if len(grid) < 1000 {
+		t.Fatalf("grid returned %d hosts, expected a full grid", len(grid))
+	}
+
+	rejected, failures := 0, 0
+	for _, host := range grid {
+		err := validateHostScheme(host, true)
+		if err == nil {
+			continue
+		}
+		rejected++
+		if msg := err.Error(); strings.Contains(msg, passwordMarker) || strings.Contains(msg, passwordFragment) {
+			failures++
+			if failures <= 10 {
+				t.Errorf("validateHostScheme(%q) error leaks the password:\n  %s", host, msg)
+			}
+		}
+	}
+	if failures > 10 {
+		t.Errorf("validateHostScheme leaked the password in %d of %d rejection messages", failures, rejected)
+	}
+	// Positive control: an assertion over rejection messages proves nothing if
+	// nothing in the grid is actually rejected.
+	if rejected < 1000 {
+		t.Fatalf("only %d grid hosts were rejected, too few to prove anything", rejected)
 	}
 }
 
@@ -812,6 +906,19 @@ func credentialHostGrid() []string { return credentialHostGridJoined("@") }
 // password span. Only the safeHost sweep feeds the encoded joins; the display
 // test deliberately does not (see the note there).
 func credentialHostGridJoined(join string) []string {
+	return credentialHostGridSeparated(":", join)
+}
+
+// credentialHostGridSeparated is credentialHostGridJoined with the userinfo
+// SEPARATOR parameterised as well as the delimiter. Until issue #75 the grid built
+// every userinfo as username+":"+password, so the separator was the one axis it
+// held constant, and the whole encoded-separator family ("%3A") was reachable only
+// through hand-written table rows. That gap hid a Critical leak: the first #75 fix
+// masked correctly for a portless host and echoed the entire credential whenever
+// the host carried a port, because every hand-written row happened to be portless.
+// The lesson is issue #65 item 8 at a different axis: ask which dimension the grid
+// holds constant and whether the root cause can vary it.
+func credentialHostGridSeparated(sep, join string) []string {
 	schemes := []string{"https://", "http://", "//", "://", "", "https:"}
 	usernames := []string{
 		"admin", "us/er", "us?er", "us#er", "us.er", "[user", "us[er",
@@ -848,7 +955,7 @@ func credentialHostGridJoined(join string) []string {
 	userinfos := make([]string, 0, len(usernames)*len(passwords))
 	for _, username := range usernames {
 		for _, password := range passwords {
-			userinfos = append(userinfos, username+":"+password)
+			userinfos = append(userinfos, username+sep+password)
 		}
 	}
 
