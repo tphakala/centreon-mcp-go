@@ -32,17 +32,15 @@ func TestHostGetHandlerFn_ReturnsMacrosFromDetail(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 	handler := hostGetHandlerFn(getDetail, getByID, testLogger(t))
-	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected tool error: %s", textOf(t, res))
 	}
-	got, ok := anyVal.(*centreon.HostDetail)
-	if !ok {
-		t.Fatalf("anyVal type = %T, want *centreon.HostDetail", anyVal)
-	}
+	var got centreon.HostDetail
+	unmarshalFenced(t, res, &got)
 	if len(got.Macros) != 1 || got.Macros[0].Name != "OS" {
 		t.Errorf("macros = %+v, want one macro named OS", got.Macros)
 	}
@@ -69,7 +67,7 @@ func TestHostGetHandlerFn_FallsBackToListWhenDetail404(t *testing.T) {
 		return host, nil
 	}
 	handler := hostGetHandlerFn(getDetail, getByID, testLogger(t))
-	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,8 +77,11 @@ func TestHostGetHandlerFn_FallsBackToListWhenDetail404(t *testing.T) {
 	if !byIDCalled {
 		t.Error("expected fallback to getByID on a 404 detail response")
 	}
-	if _, ok := anyVal.(*centreon.Host); !ok {
-		t.Fatalf("anyVal type = %T, want *centreon.Host", anyVal)
+	// The fenced output must carry the fallback list-shape host, not the failed detail.
+	var got centreon.Host
+	unmarshalFenced(t, res, &got)
+	if got.ID != 7 || got.Name != "web01" {
+		t.Errorf("fenced host = %+v, want the fallback host {ID:7 Name:web01}", got)
 	}
 }
 
@@ -195,17 +196,15 @@ func TestHostCategoryGetHandlerFn_Success(t *testing.T) {
 		return want, nil
 	}
 	handler := hostCategoryGetHandlerFn(fn, testLogger(t))
-	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 3})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.IsError {
 		t.Errorf("expected success, got error: %v", res.Content)
 	}
-	got, ok := anyVal.(*centreon.HostCategory)
-	if !ok {
-		t.Fatalf("expected *centreon.HostCategory, got %T", anyVal)
-	}
+	var got centreon.HostCategory
+	unmarshalFenced(t, res, &got)
 	if got.ID != want.ID || got.Name != want.Name {
 		t.Errorf("expected %+v, got %+v", want, got)
 	}
@@ -346,17 +345,15 @@ func TestHostSeverityGetHandlerFn_Success(t *testing.T) {
 		return want, nil
 	}
 	handler := hostSeverityGetHandlerFn(fn, testLogger(t))
-	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 2})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.IsError {
 		t.Errorf("expected success, got error: %v", res.Content)
 	}
-	got, ok := anyVal.(*centreon.HostSeverity)
-	if !ok {
-		t.Fatalf("expected *centreon.HostSeverity, got %T", anyVal)
-	}
+	var got centreon.HostSeverity
+	unmarshalFenced(t, res, &got)
 	if got.ID != want.ID || got.Name != want.Name {
 		t.Errorf("expected %+v, got %+v", want, got)
 	}

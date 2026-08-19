@@ -340,7 +340,7 @@ func TestMonitoringServiceMetricsHandler_ReturnsMetrics(t *testing.T) {
 		t.Fatalf("new client: %v", err)
 	}
 	handler := monitoringServiceMetricsHandler(client, testLogger(t))
-	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, HostServiceInput{HostID: 3, ServiceID: 8})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, HostServiceInput{HostID: 3, ServiceID: 8})
 	if err != nil {
 		t.Fatalf("handler returned error: %v", err)
 	}
@@ -351,11 +351,10 @@ func TestMonitoringServiceMetricsHandler_ReturnsMetrics(t *testing.T) {
 		t.Errorf("path = %q, want suffix /monitoring/hosts/3/services/8/metrics", gotPath)
 	}
 	// Assert the whole metric contract, not just the name, so a regression in any
-	// mapped field (id, unit, value, thresholds) is caught.
-	got, ok := anyVal.([]centreon.Metric)
-	if !ok {
-		t.Fatalf("anyVal type = %T, want []centreon.Metric", anyVal)
-	}
+	// mapped field (id, unit, value, thresholds) is caught. The payload is read
+	// from the fenced text content (read tools emit no structured copy).
+	var got []centreon.Metric
+	unmarshalFenced(t, res, &got)
 	if len(got) != 1 {
 		t.Fatalf("len(metrics) = %d, want 1", len(got))
 	}
@@ -402,7 +401,7 @@ func TestMonitoringServiceMetricsHandler_EmptyArrayNotNull(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("a no-perfdata 404 must not be an error, got: %s", textOf(t, res))
 	}
-	if got := strings.TrimSpace(textOf(t, res)); got != "[]" {
+	if got := unwrapUntrusted(t, textOf(t, res)); got != "[]" {
 		t.Errorf("output = %q, want []", got)
 	}
 }

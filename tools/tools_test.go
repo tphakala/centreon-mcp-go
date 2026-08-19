@@ -43,8 +43,10 @@ func TestErrorResult(t *testing.T) {
 func TestJsonResult(t *testing.T) {
 	data := map[string]string{"key": "value"}
 	res, anyVal := jsonResult(data)
-	if anyVal == nil {
-		t.Error("expected non-nil anyVal")
+	// anyVal must be nil: a non-nil handler output value would be marshaled by the
+	// go-sdk into an UNFENCED structuredContent copy, bypassing the fence (#80).
+	if anyVal != nil {
+		t.Errorf("expected nil anyVal so no unfenced structuredContent is emitted, got %T", anyVal)
 	}
 	if res.IsError {
 		t.Error("expected IsError false")

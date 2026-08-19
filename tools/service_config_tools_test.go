@@ -141,17 +141,15 @@ func TestServiceGetHandlerFn_ReturnsMacrosFromDetail(t *testing.T) {
 		return detail, nil
 	}
 	handler := serviceGetHandlerFn(getDetail, testLogger(t))
-	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 8})
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 8})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected tool error: %s", textOf(t, res))
 	}
-	got, ok := anyVal.(*centreon.ServiceDetail)
-	if !ok {
-		t.Fatalf("anyVal type = %T, want *centreon.ServiceDetail", anyVal)
-	}
+	var got centreon.ServiceDetail
+	unmarshalFenced(t, res, &got)
 	if len(got.Macros) != 1 || got.Macros[0].Name != "URL" {
 		t.Errorf("macros = %+v, want one macro named URL", got.Macros)
 	}

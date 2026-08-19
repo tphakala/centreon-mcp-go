@@ -62,6 +62,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	t.Setenv("CENTREON_TOKEN", "")
 	t.Setenv("CENTREON_ALLOW_SELF_SIGNED", "")
 	t.Setenv("CENTREON_ALLOW_HTTP", "")
+	t.Setenv("MCP_READ_ONLY", "")
 	t.Setenv("MCP_TRANSPORT", "")
 	t.Setenv("MCP_HTTP_PORT", "")
 	t.Setenv("MCP_HTTP_HOST", "")
@@ -94,6 +95,39 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.AllowHTTP {
 		t.Error("expected default AllowHTTP false")
 	}
+	if cfg.ReadOnly {
+		t.Error("expected default ReadOnly false")
+	}
+}
+
+func TestLoadConfig_ReadOnly(t *testing.T) {
+	base := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("CENTREON_HOST", "https://centreon.example.com")
+		t.Setenv("CENTREON_USERNAME", "admin")
+		t.Setenv("CENTREON_PASSWORD", "secret")
+		t.Setenv("CENTREON_TOKEN", "")
+	}
+
+	t.Run("true enables read-only", func(t *testing.T) {
+		base(t)
+		t.Setenv("MCP_READ_ONLY", "true")
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !cfg.ReadOnly {
+			t.Error("expected ReadOnly true")
+		}
+	})
+
+	t.Run("invalid value is a fatal config error", func(t *testing.T) {
+		base(t)
+		t.Setenv("MCP_READ_ONLY", "yesplease")
+		if _, err := LoadConfig(); err == nil {
+			t.Error("expected an error for an invalid MCP_READ_ONLY value")
+		}
+	})
 }
 
 func TestLoadConfig_MissingRequired(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 // RegisterConnectionTools registers all connection tools. host is the
 // credential-redacted Centreon host named in the success result; the caller
 // supplies it already redacted (see RegisterAll).
-func RegisterConnectionTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger, host string) {
-	mcp.AddTool(s, &mcp.Tool{
+func RegisterConnectionTools(s *Registrar, client *centreon.Client, logger *slog.Logger, host string) {
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_connection_test",
 		Description: "Verify that the configured Centreon API credentials authenticate and the API is reachable by fetching host status counts. On success the result names the connected Centreon host, with any embedded credentials redacted, or reports the literal (redacted host) when the configured URL is shaped so that the host cannot be identified without risking exposure of a credential. Takes no arguments; call this first to confirm connectivity before using other tools. Read-only.",
 		Annotations: readOnlyTool("Test connection"),

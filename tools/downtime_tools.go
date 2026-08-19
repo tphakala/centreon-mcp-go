@@ -11,56 +11,56 @@ import (
 )
 
 // RegisterDowntimeTools registers all downtime tools.
-func RegisterDowntimeTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
-	mcp.AddTool(s, &mcp.Tool{
+func RegisterDowntimeTools(s *Registrar, client *centreon.Client, logger *slog.Logger) {
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_list",
 		Description: "Retrieve scheduled maintenance windows across the entire platform, spanning every host and service, that suppress notifications during planned outages. Use this for a platform-wide view; narrow to one host with centreon_downtime_host_list or one service with centreon_downtime_service_list, and fetch a single window by ID with centreon_downtime_get. Paginated (page 1, limit 30, max 100 per page) with optional name search. Read-only.",
 		Annotations: readOnlyTool("List downtimes"),
 	}, downtimeListHandler(client, logger))
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_get",
 		Description: "Fetch the complete detail of one scheduled maintenance window identified by its numeric downtime ID, including its comment, start and end times, and fixed or flexible type. Use this when you already hold the ID; discover IDs first with centreon_downtime_list, centreon_downtime_host_list, or centreon_downtime_service_list. Returns a single record. Read-only.",
 		Annotations: readOnlyTool("Get downtime"),
 	}, downtimeGetHandler(client, logger))
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_cancel",
 		Description: "Cancel one scheduled maintenance window by its numeric downtime ID, ending the notification suppression it applied. Use this to remove a single window; cancel every window on a host with centreon_downtime_host_cancel or every window on a service with centreon_downtime_service_cancel, and schedule a new window with centreon_downtime_host_create or centreon_downtime_service_create. Removes the identified downtime. Writes to Centreon.",
 		Annotations: deleteTool("Cancel downtime"),
 	}, downtimeCancelHandler(client, logger))
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_host_list",
 		Description: "List the scheduled maintenance windows attached to one host identified by its host ID. Use this to scope results to a single host; list every window platform-wide with centreon_downtime_list, or restrict to one service on the host with centreon_downtime_service_list. Paginated (page 1, limit 30, max 100 per page) with optional name search. Read-only.",
 		Annotations: readOnlyTool("List host downtimes"),
 	}, downtimeHostListHandler(client, logger))
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_service_list",
 		Description: "List the scheduled maintenance windows attached to one service, identified by its host ID and service ID together. Use this to scope results to a single service; widen to every window on the host with centreon_downtime_host_list or the whole platform with centreon_downtime_list. Paginated (page 1, limit 30, max 100 per page) with optional name search. Read-only.",
 		Annotations: readOnlyTool("List service downtimes"),
 	}, downtimeServiceListHandler(client, logger))
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_host_create",
 		Description: "Schedule a maintenance window on one host so its notifications are suppressed between a start and end time, optionally covering every service on the host. Use this for host-level downtime; schedule a single service instead with centreon_downtime_service_create, and remove a window with centreon_downtime_host_cancel or centreon_downtime_cancel. Requires hostID, a comment, and RFC3339 startTime and endTime with endTime after startTime; set isFixed for a fixed window or supply duration in seconds for a flexible one, and set withServices to include all of the host's services. Writes to Centreon.",
 		Annotations: createTool("Schedule host downtime"),
 	}, downtimeHostCreateHandler(client, logger))
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_service_create",
 		Description: "Schedule a maintenance window on one service, identified by its host ID and service ID, so only that service's notifications are suppressed between a start and end time. Use this for a single service; cover an entire host with centreon_downtime_host_create, and remove a window with centreon_downtime_service_cancel or centreon_downtime_cancel. Requires hostID, serviceID, a comment, and RFC3339 startTime and endTime with endTime after startTime; set isFixed for a fixed window or supply duration in seconds for a flexible one. Writes to Centreon.",
 		Annotations: createTool("Schedule service downtime"),
 	}, downtimeServiceCreateHandler(client, logger))
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_host_cancel",
 		Description: "Cancel every scheduled maintenance window currently attached to one host, identified by its host ID, restoring that host's notifications. Use this to clear a host in bulk; remove a single window by ID with centreon_downtime_cancel, or clear one service with centreon_downtime_service_cancel. Removes all of the host's downtimes in one call. Writes to Centreon.",
 		Annotations: deleteTool("Cancel host downtimes"),
 	}, downtimeHostCancelHandler(client, logger))
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_downtime_service_cancel",
 		Description: "Cancel every scheduled maintenance window currently attached to one service, identified by its host ID and service ID, restoring that service's notifications. Use this to clear a service in bulk; clear the whole host with centreon_downtime_host_cancel, or remove a single window by ID with centreon_downtime_cancel. Removes all of the service's downtimes in one call. Writes to Centreon.",
 		Annotations: deleteTool("Cancel service downtimes"),
