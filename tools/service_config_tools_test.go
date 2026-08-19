@@ -208,8 +208,9 @@ func TestServiceGetHandlerFn_RouteNotFoundPreciseHint(t *testing.T) {
 // client.Services.Get (GET /configuration/services/{id}), not some other method.
 // Rewiring it (e.g. to client.Hosts.Get) changes the path and turns this red.
 func TestServiceGetHandler_SendsPath(t *testing.T) {
-	var gotPath string
+	var gotMethod, gotPath string
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":8,"name":"ping"}`))
@@ -226,6 +227,9 @@ func TestServiceGetHandler_SendsPath(t *testing.T) {
 	}
 	if res.IsError {
 		t.Fatalf("unexpected tool error: %s", textOf(t, res))
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method = %q, want GET", gotMethod)
 	}
 	if !strings.HasSuffix(gotPath, "/configuration/services/8") {
 		t.Errorf("path = %q, want suffix /configuration/services/8", gotPath)
