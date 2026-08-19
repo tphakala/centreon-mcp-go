@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `CENTREON_PASSWORD_FILE` and `CENTREON_TOKEN_FILE` environment variables.
+  Secret credentials can now be read from mounted files (Docker and Kubernetes
+  secrets convention). A `_FILE` variable takes precedence over its inline
+  counterpart, and exactly one trailing newline (`\n` or `\r\n`) is trimmed.
+  A set but missing, unreadable, or empty file produces a configuration error. (#84)
+- `doctor` subcommand (`centreon-mcp-go doctor`) to verify configuration, check
+  network connectivity and API credentials, and report the Centreon Web version
+  with exit codes 0 (healthy), 1 (config error), 2 (unreachable), and 3 (bad
+  credentials). (#82)
 - `MCP_READ_ONLY` environment variable. When set to `true`, every tool that writes
   to Centreon is still listed but refuses with a tool-level error and performs no
   action, while the read tools work normally. Read-only is the safe default to
@@ -49,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Token-based authentication now performs a startup validation check (GET
+  `/monitoring/hosts/status`) during server boot in stdio and HTTP env-auth
+  modes, failing fast on a bad or expired token. Like password-mode's existing
+  login-at-boot, this means an unreachable platform now blocks startup instead
+  of the server starting and failing on the first tool call. (#82)
 - The `github.com/tphakala/centreon-go-client` dependency is updated to v2.1.0.
   v2.0.0 adopted upstream fixes for tools this server already ships: downtime and
   token timestamps are truncated to whole seconds (Centreon 25.10 rejects

@@ -75,6 +75,26 @@ func TestRunStdio_LoginErrorRedacted(t *testing.T) {
 	}
 }
 
+// TestRunStdio_TokenPreflightErrorRedacted pins that a failed startup token
+// preflight does not carry the credential out through the error returned to main
+// (CWE-532, #63, #82).
+func TestRunStdio_TokenPreflightErrorRedacted(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.DiscardHandler)
+	cfg := &Config{Host: misparsedHost, Token: "tok"}
+
+	err := runStdio(t.Context(), cfg, logger, failDNSClient(), nil)
+	if err == nil {
+		t.Fatal("want a preflight error, got nil")
+	}
+	if strings.Contains(err.Error(), leakMarker) {
+		t.Errorf("token preflight error leaked credential (CWE-532): %v", err)
+	}
+	if !strings.Contains(err.Error(), "centreon token validation failed") {
+		t.Errorf("want the token-validation-failure wrap to stay identifiable, got: %v", err)
+	}
+}
+
 // TestLogoutCachedToken_LogNeverLeaksCredential pins that the gateway
 // token-logout Debug sinks (#63) do not print the credential-bearing host URL.
 // logoutCachedToken builds its client with a nil logger, so the buffer holds
