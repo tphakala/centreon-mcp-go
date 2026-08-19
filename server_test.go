@@ -769,6 +769,27 @@ func TestNewHTTPClient_Wiring(t *testing.T) {
 	}
 }
 
+// isolatedRedirectClient returns the guarded HTTP client that newHTTPClient(false)
+// builds, but on its OWN transport rather than the shared http.DefaultTransport.
+// The redirect tests run with t.Parallel() and each starts an httptest.Server, and
+// httptest.Server.Close() calls http.DefaultTransport.CloseIdleConnections()
+// (verified in Go 1.26 net/http/httptest/server.go). A sibling test's deferred
+// Close() can therefore tear down an in-flight request this test is running on the
+// shared default transport, surfacing "transport connection broken: http:
+// CloseIdleConnections called" instead of the CheckRedirect error the test asserts
+// (issue #54). An isolated transport removes that cross-test interference, and
+// disabling keep-alives keeps a connection from lingering; CheckRedirect, the guard
+// under test, is set on the client by newHTTPClient and is left untouched.
+func isolatedRedirectClient(t *testing.T) *http.Client {
+	t.Helper()
+	hc, err := newHTTPClient(false)
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	hc.Transport = &http.Transport{DisableKeepAlives: true}
+	return hc
+}
+
 // TestNewHTTPClient_FollowsSameHostRedirect proves the policy does not
 // over-block: a same-host 302 is still followed to completion through the real
 // client newHTTPClient builds.
@@ -785,10 +806,7 @@ func TestNewHTTPClient_FollowsSameHostRedirect(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	hc, err := newHTTPClient(false)
-	if err != nil {
-		t.Fatalf("newHTTPClient: %v", err)
-	}
+	hc := isolatedRedirectClient(t)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/start", http.NoBody)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -818,10 +836,7 @@ func TestNewHTTPClient_BlocksCrossHostRedirect(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	hc, err := newHTTPClient(false)
-	if err != nil {
-		t.Fatalf("newHTTPClient: %v", err)
-	}
+	hc := isolatedRedirectClient(t)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/start", http.NoBody)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -850,10 +865,7 @@ func TestNewHTTPClient_StopsRedirectLoop(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	hc, err := newHTTPClient(false)
-	if err != nil {
-		t.Fatalf("newHTTPClient: %v", err)
-	}
+	hc := isolatedRedirectClient(t)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/loop", http.NoBody)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -921,10 +933,7 @@ func TestNewCentreonClient_AllowSelfSignedDoesNotBypassRedirectGuard(t *testing.
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	httpClient, err := newHTTPClient(false)
-	if err != nil {
-		t.Fatalf("newHTTPClient: %v", err)
-	}
+	httpClient := isolatedRedirectClient(t)
 
 	// AllowSelfSigned is deliberately set: newCentreonClient must ignore it and use
 	// the guarded httpClient, so the cross-host redirect is still refused.
