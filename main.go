@@ -11,6 +11,12 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runDoctor(ctx, os.Stdout)
+		cancel()
+		os.Exit(code)
+	}
 	if err := runMain(); err != nil {
 		os.Exit(1)
 	}

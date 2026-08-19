@@ -60,7 +60,9 @@ All configuration is via environment variables.
 | `CENTREON_HOST`             | Yes      | (none)      | Centreon server base URL (e.g. `https://centreon.example.com`) |
 | `CENTREON_USERNAME`         | *        | (none)      | Username for session-based authentication                    |
 | `CENTREON_PASSWORD`         | *        | (none)      | Password for session-based authentication                    |
+| `CENTREON_PASSWORD_FILE`    | No       | (none)      | Read the password from this file; takes precedence over CENTREON_PASSWORD; one trailing newline is trimmed |
 | `CENTREON_TOKEN`            | *        | (none)      | API token (alternative to username + password)               |
+| `CENTREON_TOKEN_FILE`       | No       | (none)      | Read the API token from this file; takes precedence over CENTREON_TOKEN; one trailing newline is trimmed |
 | `CENTREON_ALLOW_SELF_SIGNED`| No       | `false`     | Accept self-signed TLS certificates                          |
 | `CENTREON_ALLOW_HTTP`       | No       | `false`     | Permit cleartext `http://` Centreon URLs. Off by default; `http` sends credentials unencrypted (CWE-319). |
 | `MCP_TRANSPORT`             | No       | `stdio`     | Transport mode: `stdio` or `http`                            |
@@ -71,7 +73,7 @@ All configuration is via environment variables.
 | `CENTREON_ALLOWED_HOSTS`    | No       | (none)      | Gateway mode only: comma-separated allowlist of accepted `X-Centreon-Host` values. Unset or empty means any host is accepted. |
 | `LOG_LEVEL`                 | No       | `info`      | Log level: `debug`, `info`, `warn`, or `error`               |
 
-\* Either `CENTREON_TOKEN` or both `CENTREON_USERNAME` and `CENTREON_PASSWORD` must be set. In `gateway` auth mode, credentials are supplied per-request via headers instead.
+\* Either `CENTREON_TOKEN` (or `CENTREON_TOKEN_FILE`) or both `CENTREON_USERNAME` and `CENTREON_PASSWORD` (or `CENTREON_PASSWORD_FILE`) must be set. In `gateway` auth mode, credentials are supplied per-request via headers instead.
 
 > **Note on redirects:** to protect the session token, the server never follows an HTTP redirect to a different host. Point `CENTREON_HOST` (and, in gateway mode, `X-Centreon-Host`) at the URL that serves the Centreon API directly. A host that redirects to a different hostname (for example an apex-to-`www` or a vanity-to-backend redirect) makes requests fail with `refusing cross-host redirect`; use the final resolved URL instead. Same-host redirects, including an `http` to `https` upgrade, are still followed.
 
@@ -226,6 +228,30 @@ The Centreon user account used by this server requires access to the Centreon RE
 - **Platform status**: administrator or operator access
 
 For a minimal read-only deployment, a standard monitoring user with API access is sufficient. For full tool coverage, an administrator account is recommended.
+
+## Doctor
+
+The `doctor` subcommand checks configuration, tests connectivity and credentials against the Centreon API, and reports the Centreon Web version:
+
+```bash
+centreon-mcp-go doctor
+```
+
+Sample output:
+
+```text
+config: ok (host https://centreon.example.com, transport stdio, auth mode env)
+connectivity: ok
+credentials: ok
+centreon version: 24.10.3
+doctor: healthy
+```
+
+Exit codes:
+- `0`: Healthy. Configuration is valid, connectivity and credentials are confirmed (or skipped in gateway mode), and the server is ready to run.
+- `1`: Configuration error. Required environment variables or secret files are missing, malformed, unreadable, or empty.
+- `2`: Unreachable. The Centreon platform cannot be reached (for example DNS failure, connection refused, TLS error, or non-auth HTTP error).
+- `3`: Bad credentials. The Centreon API rejected the configured credentials (HTTP 401 or 403). Note: an API token that authenticates successfully but lacks realtime-monitoring permissions also classifies as bad credentials (403).
 
 ## Development
 

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +13,8 @@ func TestLoadConfig_Valid(t *testing.T) {
 	t.Setenv("CENTREON_USERNAME", "admin")
 	t.Setenv("CENTREON_PASSWORD", "secret")
 	t.Setenv("CENTREON_TOKEN", "tok123")
+	t.Setenv("CENTREON_PASSWORD_FILE", "")
+	t.Setenv("CENTREON_TOKEN_FILE", "")
 	t.Setenv("CENTREON_ALLOW_SELF_SIGNED", "true")
 	t.Setenv("MCP_TRANSPORT", "http")
 	t.Setenv("MCP_HTTP_PORT", "9090")
@@ -60,6 +64,8 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	t.Setenv("CENTREON_USERNAME", "admin")
 	t.Setenv("CENTREON_PASSWORD", "secret")
 	t.Setenv("CENTREON_TOKEN", "")
+	t.Setenv("CENTREON_PASSWORD_FILE", "")
+	t.Setenv("CENTREON_TOKEN_FILE", "")
 	t.Setenv("CENTREON_ALLOW_SELF_SIGNED", "")
 	t.Setenv("CENTREON_ALLOW_HTTP", "")
 	t.Setenv("MCP_READ_ONLY", "")
@@ -107,6 +113,8 @@ func TestLoadConfig_ReadOnly(t *testing.T) {
 		t.Setenv("CENTREON_USERNAME", "admin")
 		t.Setenv("CENTREON_PASSWORD", "secret")
 		t.Setenv("CENTREON_TOKEN", "")
+		t.Setenv("CENTREON_PASSWORD_FILE", "")
+		t.Setenv("CENTREON_TOKEN_FILE", "")
 	}
 
 	t.Run("true enables read-only", func(t *testing.T) {
@@ -149,6 +157,8 @@ func TestLoadConfig_MissingRequired(t *testing.T) {
 			t.Setenv("CENTREON_USERNAME", tt.username)
 			t.Setenv("CENTREON_PASSWORD", tt.password)
 			t.Setenv("CENTREON_TOKEN", "")
+			t.Setenv("CENTREON_PASSWORD_FILE", "")
+			t.Setenv("CENTREON_TOKEN_FILE", "")
 
 			_, err := LoadConfig()
 			if err == nil {
@@ -166,6 +176,8 @@ func TestLoadConfig_TokenOnly(t *testing.T) {
 	t.Setenv("CENTREON_USERNAME", "")
 	t.Setenv("CENTREON_PASSWORD", "")
 	t.Setenv("CENTREON_TOKEN", "my-api-token")
+	t.Setenv("CENTREON_PASSWORD_FILE", "")
+	t.Setenv("CENTREON_TOKEN_FILE", "")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -174,6 +186,206 @@ func TestLoadConfig_TokenOnly(t *testing.T) {
 	if cfg.Token != "my-api-token" {
 		t.Errorf("expected Token my-api-token, got %q", cfg.Token)
 	}
+}
+
+type secretFileCase struct {
+	name         string
+	fileContents string
+	passwordVar  string
+	tokenVar     string
+	usePassFile  bool
+	useTokenFile bool
+	wantPassword string
+	wantToken    string
+}
+
+func runSecretFileTest(t *testing.T, tt *secretFileCase) {
+	t.Helper()
+	t.Setenv("CENTREON_HOST", "https://centreon.example.com")
+	t.Setenv("CENTREON_USERNAME", "admin")
+	t.Setenv("CENTREON_PASSWORD", tt.passwordVar)
+	t.Setenv("CENTREON_TOKEN", tt.tokenVar)
+	t.Setenv("CENTREON_PASSWORD_FILE", "")
+	t.Setenv("CENTREON_TOKEN_FILE", "")
+
+	if tt.useTokenFile {
+		t.Setenv("CENTREON_USERNAME", "")
+		t.Setenv("CENTREON_PASSWORD", "")
+		t.Setenv("CENTREON_TOKEN", "")
+	}
+
+	if tt.usePassFile {
+		path := filepath.Join(t.TempDir(), "passwd")
+		if err := os.WriteFile(path, []byte(tt.fileContents), 0o600); err != nil {
+			t.Fatalf("write temp secret: %v", err)
+		}
+		t.Setenv("CENTREON_PASSWORD_FILE", path)
+	}
+	if tt.useTokenFile {
+		path := filepath.Join(t.TempDir(), "token")
+		if err := os.WriteFile(path, []byte(tt.fileContents), 0o600); err != nil {
+			t.Fatalf("write temp secret: %v", err)
+		}
+		t.Setenv("CENTREON_TOKEN_FILE", path)
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if tt.wantPassword != "" && cfg.Password != tt.wantPassword {
+		t.Errorf("expected Password %q, got %q", tt.wantPassword, cfg.Password)
+	}
+	if tt.wantToken != "" && cfg.Token != tt.wantToken {
+		t.Errorf("expected Token %q, got %q", tt.wantToken, cfg.Token)
+	}
+}
+
+func TestLoadConfig_SecretFile(t *testing.T) {
+	tests := []secretFileCase{
+		{
+			name:         "password from file, inline unset",
+			fileContents: "filepw\n",
+			usePassFile:  true,
+			wantPassword: "filepw",
+		},
+		{
+			name:         "file precedence over inline",
+			fileContents: "filepw",
+			passwordVar:  "inlinepw",
+			usePassFile:  true,
+			wantPassword: "filepw",
+		},
+		{
+			name:         "token from file satisfies requirement",
+			fileContents: "filetok\n",
+			useTokenFile: true,
+			wantToken:    "filetok",
+		},
+		{
+			name:         "trailing LF trimmed",
+			fileContents: "tok\n",
+			useTokenFile: true,
+			wantToken:    "tok",
+		},
+		{
+			name:         "trailing CRLF trimmed",
+			fileContents: "tok\r\n",
+			useTokenFile: true,
+			wantToken:    "tok",
+		},
+		{
+			name:         "only one newline trimmed",
+			fileContents: "tok\n\n",
+			useTokenFile: true,
+			wantToken:    "tok\n",
+		},
+		{
+			name:         "trailing space preserved",
+			fileContents: "tok \n",
+			useTokenFile: true,
+			wantToken:    "tok ",
+		},
+		{
+			name:         "bare trailing CR preserved",
+			fileContents: "tok\r",
+			useTokenFile: true,
+			wantToken:    "tok\r",
+		},
+		{
+			name:         "unset _FILE leaves inline behavior",
+			passwordVar:  "inlinepw",
+			wantPassword: "inlinepw",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runSecretFileTest(t, &tt)
+		})
+	}
+}
+
+func testSecretFileMissing(t *testing.T) {
+	t.Setenv("CENTREON_HOST", "https://centreon.example.com")
+	t.Setenv("CENTREON_USERNAME", "admin")
+	t.Setenv("CENTREON_PASSWORD", "")
+	t.Setenv("CENTREON_TOKEN", "")
+	t.Setenv("CENTREON_TOKEN_FILE", "")
+	absentPath := filepath.Join(t.TempDir(), "absent")
+	t.Setenv("CENTREON_PASSWORD_FILE", absentPath)
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected error for missing secret file, got nil")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "CENTREON_PASSWORD_FILE") {
+		t.Errorf("expected error to name variable CENTREON_PASSWORD_FILE, got: %v", err)
+	}
+	if !strings.Contains(errStr, absentPath) {
+		t.Errorf("expected error to contain path %q, got: %v", absentPath, err)
+	}
+	if !strings.Contains(errStr, "cannot read secret file") {
+		t.Errorf("expected error to contain 'cannot read secret file', got: %v", err)
+	}
+}
+
+func testSecretFileEmpty(t *testing.T) {
+	t.Setenv("CENTREON_HOST", "https://centreon.example.com")
+	t.Setenv("CENTREON_USERNAME", "")
+	t.Setenv("CENTREON_PASSWORD", "")
+	t.Setenv("CENTREON_TOKEN", "")
+	t.Setenv("CENTREON_PASSWORD_FILE", "")
+	emptyFile := filepath.Join(t.TempDir(), "empty_token")
+	if err := os.WriteFile(emptyFile, []byte("\n"), 0o600); err != nil {
+		t.Fatalf("write empty temp secret: %v", err)
+	}
+	t.Setenv("CENTREON_TOKEN_FILE", emptyFile)
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected error for empty secret file, got nil")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "CENTREON_TOKEN_FILE") {
+		t.Errorf("expected error to name variable CENTREON_TOKEN_FILE, got: %v", err)
+	}
+	if !strings.Contains(errStr, emptyFile) {
+		t.Errorf("expected error to contain path %q, got: %v", emptyFile, err)
+	}
+	if !strings.Contains(errStr, "is empty") {
+		t.Errorf("expected error to contain 'is empty', got: %v", err)
+	}
+}
+
+func testSecretFileNeverLeaks(t *testing.T) {
+	const leakSecret = "leakmarker-secret"
+	t.Setenv("CENTREON_HOST", "https://centreon.example.com")
+	t.Setenv("CENTREON_USERNAME", "admin")
+	t.Setenv("CENTREON_PASSWORD", "")
+	t.Setenv("CENTREON_TOKEN", "")
+	t.Setenv("CENTREON_TOKEN_FILE", "")
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(path, []byte(leakSecret+"\n"), 0o600); err != nil {
+		t.Fatalf("write temp secret: %v", err)
+	}
+	t.Setenv("CENTREON_PASSWORD_FILE", path)
+	t.Setenv("MCP_HTTP_PORT", "invalid-port")
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected port parsing error, got nil")
+	}
+	if strings.Contains(err.Error(), leakSecret) {
+		t.Errorf("error leaked secret file contents: %v", err)
+	}
+}
+
+func TestLoadConfig_SecretFileErrors(t *testing.T) {
+	t.Run("missing file", testSecretFileMissing)
+	t.Run("empty file", testSecretFileEmpty)
+	t.Run("secret never leaks", testSecretFileNeverLeaks)
 }
 
 func TestLoadConfig_AllowedHosts(t *testing.T) {

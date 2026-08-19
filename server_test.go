@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1140,5 +1141,175 @@ func TestRunStdio_ToolResponseReportsRedactedHost(t *testing.T) {
 	case <-errCh:
 	case <-time.After(15 * time.Second):
 		t.Fatal("runStdio did not return within 15s after context cancel")
+	}
+}
+
+func TestRunStdio_TokenPreflightRejectsBadToken(t *testing.T) {
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code":    401,
+			"message": "invalid token",
+		})
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	cfg := &Config{
+		Host:      fake.URL,
+		Token:     "bad-token",
+		AllowHTTP: true,
+	}
+
+	err := runStdio(t.Context(), cfg, slog.New(slog.DiscardHandler), nil, nil)
+	if err == nil {
+		t.Fatal("expected error on bad token preflight, got nil")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "centreon token validation failed") {
+		t.Errorf("expected error to contain 'centreon token validation failed', got: %v", err)
+	}
+	if !strings.Contains(errStr, "HTTP 401") {
+		t.Errorf("expected error to contain 'HTTP 401', got: %v", err)
+	}
+	if strings.Contains(errStr, "bad-token") {
+		t.Errorf("error leaked token (CWE-532): %v", err)
+	}
+}
+
+func TestRunStdio_TokenPreflightSuccessProceeds(t *testing.T) {
+	var statusHits atomic.Int32
+
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		statusHits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	cfg := &Config{
+		Host:      fake.URL,
+		Token:     "valid-tok",
+		Transport: transportStdio,
+		AllowHTTP: true,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runStdio(ctx, cfg, slog.New(slog.DiscardHandler), nil, serverTransport) }()
+
+	c := mcp.NewClient(&mcp.Implementation{Name: "preflight-test", Version: "0"}, nil)
+	cs, err := c.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	_ = cs.Close()
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("runStdio returned error: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("runStdio did not return within 15s after context cancel")
+	}
+
+	if got := statusHits.Load(); got != 1 {
+		t.Errorf("expected status endpoint to be called exactly once during preflight, got %d", got)
+	}
+}
+
+func TestRunHTTP_EnvTokenPreflightRejectsBadToken(t *testing.T) {
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code":    401,
+			"message": "invalid token",
+		})
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	port := freePort(t)
+	cfg := &Config{
+		Host:      fake.URL,
+		Transport: transportHTTP,
+		AuthMode:  authModeEnv,
+		Token:     "bad-token",
+		AllowHTTP: true,
+		HTTPHost:  "127.0.0.1",
+		HTTPPort:  port,
+	}
+
+	err := runHTTP(t.Context(), cfg, slog.New(slog.DiscardHandler), nil)
+	if err == nil {
+		t.Fatal("expected error on bad token preflight, got nil")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "centreon token validation failed") {
+		t.Errorf("expected error to contain 'centreon token validation failed', got: %v", err)
+	}
+	if strings.Contains(errStr, "bad-token") {
+		t.Errorf("error leaked token (CWE-532): %v", err)
+	}
+}
+
+func TestRunHTTP_GatewayModeSkipsStartupPreflight(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	var statusHits, logins atomic.Int32
+
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		statusHits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fakeMux.HandleFunc("POST /centreon/api/latest/login", func(w http.ResponseWriter, _ *http.Request) {
+		n := logins.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"security": map[string]any{"token": fmt.Sprintf("tok-%d", n)}})
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	port := freePort(t)
+	cfg := &Config{
+		Host:      fake.URL,
+		Transport: transportHTTP,
+		AuthMode:  authModeGateway,
+		HTTPHost:  "127.0.0.1",
+		HTTPPort:  port,
+		AllowHTTP: true,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runHTTP(ctx, cfg, logger, nil) }()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitForHealth(t, base+"/health")
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runHTTP returned error on shutdown: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("runHTTP did not return within 15s after context cancel")
+	}
+
+	if got := statusHits.Load(); got != 0 {
+		t.Errorf("gateway mode should not hit status endpoint on startup, got %d hits", got)
+	}
+	if got := logins.Load(); got != 0 {
+		t.Errorf("gateway mode should not hit login endpoint on startup, got %d logins", got)
 	}
 }

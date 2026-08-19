@@ -42,28 +42,47 @@ type Config struct {
 	AllowedHosts []string
 }
 
-// LoadConfig reads configuration from environment variables.
-func LoadConfig() (Config, error) {
-	cfg := Config{
-		Host:     os.Getenv("CENTREON_HOST"),
-		Username: os.Getenv("CENTREON_USERNAME"),
-		Password: os.Getenv("CENTREON_PASSWORD"),
-		Token:    os.Getenv("CENTREON_TOKEN"),
-		HTTPHost: os.Getenv("MCP_HTTP_HOST"),
+// loadCredentials resolves the password and token, preferring their _FILE
+// variants when set, and validates that the host and a usable credential
+// (a token, or a username plus password) are present.
+func loadCredentials(cfg *Config) error {
+	password, err := resolveSecretEnv("CENTREON_PASSWORD")
+	if err != nil {
+		return err
 	}
+	cfg.Password = password
+	token, err := resolveSecretEnv("CENTREON_TOKEN")
+	if err != nil {
+		return err
+	}
+	cfg.Token = token
 
 	if cfg.Host == "" {
-		return Config{}, fmt.Errorf("CENTREON_HOST environment variable is required")
+		return fmt.Errorf("CENTREON_HOST environment variable is required")
 	}
 
 	// Either token or username+password must be set
 	if cfg.Token == "" {
 		if cfg.Username == "" {
-			return Config{}, fmt.Errorf("CENTREON_USERNAME environment variable is required (or set CENTREON_TOKEN)")
+			return fmt.Errorf("CENTREON_USERNAME environment variable is required (or set CENTREON_TOKEN)")
 		}
 		if cfg.Password == "" {
-			return Config{}, fmt.Errorf("CENTREON_PASSWORD environment variable is required (or set CENTREON_TOKEN)")
+			return fmt.Errorf("CENTREON_PASSWORD environment variable is required (or set CENTREON_TOKEN)")
 		}
+	}
+	return nil
+}
+
+// LoadConfig reads configuration from environment variables.
+func LoadConfig() (Config, error) {
+	cfg := Config{
+		Host:     os.Getenv("CENTREON_HOST"),
+		Username: os.Getenv("CENTREON_USERNAME"),
+		HTTPHost: os.Getenv("MCP_HTTP_HOST"),
+	}
+
+	if err := loadCredentials(&cfg); err != nil {
+		return Config{}, err
 	}
 
 	cfg.Transport = envOr("MCP_TRANSPORT", transportStdio)
@@ -195,6 +214,45 @@ func parseBoolEnv(name string) (bool, error) {
 		return false, fmt.Errorf("invalid %s value %q: expected true/false", name, raw)
 	}
 	return v, nil
+}
+
+// resolveSecretEnv returns the value of the secret environment variable name,
+// preferring the file named by the <name>_FILE variant when that variant is
+// set. The file form (Docker and Kubernetes secrets convention) takes
+// precedence over the inline variable so a mounted secret cannot be shadowed
+// by a stale inline value. A set but missing, unreadable, or empty file is a
+// hard configuration error: failing fast beats authenticating with an empty
+// secret. The error names the variable and the file path but never the file
+// contents (CWE-532).
+func resolveSecretEnv(name string) (string, error) {
+	fileVar := name + "_FILE"
+	path := os.Getenv(fileVar)
+	if path == "" {
+		return os.Getenv(name), nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("%s: cannot read secret file: %w", fileVar, err)
+	}
+	secret := trimTrailingNewline(string(data))
+	if secret == "" {
+		return "", fmt.Errorf("%s: secret file %q is empty", fileVar, path)
+	}
+	return secret, nil
+}
+
+// trimTrailingNewline removes exactly one trailing line break, "\r\n" or "\n",
+// from s. Nothing else is trimmed: a secret may legitimately end in a space,
+// a tab, or even a bare carriage return, so only the newline that an editor
+// or an echo appends is stripped, and only one of them.
+func trimTrailingNewline(s string) string {
+	if after, ok := strings.CutSuffix(s, "\r\n"); ok {
+		return after
+	}
+	if after, ok := strings.CutSuffix(s, "\n"); ok {
+		return after
+	}
+	return s
 }
 
 // gatewayMode reports whether the server runs in HTTP gateway mode: http

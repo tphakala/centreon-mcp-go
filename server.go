@@ -180,6 +180,18 @@ func newCentreonClient(host string, cfg *Config, logger *slog.Logger, httpClient
 	return centreon.NewClient(host, opts...)
 }
 
+// checkCredentials performs the cheapest authenticated read against the
+// Centreon API, GET /monitoring/hosts/status, the same call the
+// centreon_connection_test tool uses. It confirms in one round trip that the
+// platform is reachable and the configured credential is accepted. It returns
+// the raw client error so each caller can classify it for its own sink:
+// redact.Reason for the startup error paths, the typed HTTPStatus check for
+// the doctor subcommand. Callers must not print the raw error (CWE-532).
+func checkCredentials(ctx context.Context, client *centreon.Client) error {
+	_, err := client.MonitoringHosts.StatusCounts(ctx)
+	return err
+}
+
 // warnIfAllowlistIneffective emits a startup warning when CENTREON_ALLOWED_HOSTS
 // is configured but the effective mode will never consult it. The allowlist is
 // only enforced in gateway mode (http transport with gateway auth); in every
@@ -236,6 +248,16 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient 
 		}
 		defer logoutClientBounded(ctx, client, logger)
 		logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
+	} else {
+		// Token mode performs no login, so an invalid or expired token would
+		// otherwise surface only on the first tool call. Validate at boot and
+		// fail fast (issue #82) via the cheapest authenticated read
+		// (StatusCounts); this also exercises realtime-monitoring access, so it
+		// is slightly stricter than the password path's plain Login.
+		if err := checkCredentials(ctx, client); err != nil {
+			return fmt.Errorf("centreon token validation failed (host %s): %s", safeHost(cfg.Host), redact.Reason(err))
+		}
+		logger.Info("centreon token validated", "host", safeHost(cfg.Host))
 	}
 
 	s := buildServer(client, logger, displayHost(cfg.Host), cfg.ReadOnly)
@@ -285,6 +307,16 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 				return fmt.Errorf("centreon login failed (host %s): %s", safeHost(cfg.Host), redact.Reason(err))
 			}
 			logger.Info("centreon client authenticated", "host", safeHost(cfg.Host))
+		} else {
+			// Token mode performs no login, so an invalid or expired token would
+			// otherwise surface only on the first tool call. Validate at boot and
+			// fail fast (issue #82) via the cheapest authenticated read
+			// (StatusCounts); this also exercises realtime-monitoring access, so it
+			// is slightly stricter than the password path's plain Login.
+			if err := checkCredentials(ctx, client); err != nil {
+				return fmt.Errorf("centreon token validation failed (host %s): %s", safeHost(cfg.Host), redact.Reason(err))
+			}
+			logger.Info("centreon token validated", "host", safeHost(cfg.Host))
 		}
 		sharedClient = client
 		envDisplayHost = displayHost(cfg.Host)
