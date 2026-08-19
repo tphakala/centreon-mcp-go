@@ -352,10 +352,18 @@ func nonEmptyTrimmed(vals []string) []string {
 
 // versionSensitiveReason is redact.Reason, except a Centreon 404 is rendered as a
 // hint that the resource may be missing or the endpoint may not exist on the
-// connected Centreon version. It suits tools whose endpoint may be absent on an
-// older Centreon; like redact.Reason it emits only fixed strings and the status
-// classification, never a credential-bearing message from the error.
+// connected Centreon version. A routing 404 the client has classified as an
+// absent route (IsRouteNotFound) gets the precise "API route not present"
+// wording; any other 404 keeps the ambiguous wording, because a resource-404 and
+// an older-Centreon-404 are indistinguishable without that route signal. It suits
+// tools whose endpoint may be absent on an older Centreon; like redact.Reason it
+// emits only fixed strings and the status classification (IsRouteNotFound returns
+// only a bool after the client vets the response body), never a credential-bearing
+// message from the error.
 func versionSensitiveReason(err error) string {
+	if centreon.IsRouteNotFound(err) {
+		return "unsupported on this Centreon version (API route not present)"
+	}
 	if isNotFoundStatus(err) {
 		return "not found, or unsupported on this Centreon version"
 	}

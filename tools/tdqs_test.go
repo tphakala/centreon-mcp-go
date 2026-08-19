@@ -55,7 +55,7 @@ func checkToolTDQS(t *testing.T, tool *mcp.Tool) {
 // checks the tier-A invariants on each. A zero-value client is enough because
 // registration only binds handler method values; tools/list never calls them.
 func TestTDQS_ToolDefinitionsQuality(t *testing.T) {
-	const wantTools = 88
+	const wantTools = 91
 
 	ctx := t.Context()
 
