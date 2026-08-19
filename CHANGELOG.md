@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `MCP_READ_ONLY` environment variable. When set to `true`, every tool that writes
+  to Centreon is still listed but refuses with a tool-level error and performs no
+  action, while the read tools work normally. Read-only is the safe default to
+  recommend for agent-driven or exploratory use, and it matters most in HTTP
+  env-auth mode, where one shared pre-authenticated client otherwise backs the full
+  write surface. Enforcement keys off each tool's own read-only annotation, so a
+  tool with no read-only annotation fails closed. (#81)
 - `centreon_monitoring_service_metrics`: retrieve a service's current performance
   metric values (name, unit, current value, and warning/critical thresholds) by
   `hostID` and `serviceID`. A service with no performance data returns an empty
@@ -67,6 +74,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Free text that Centreon returns to the model (plugin and check output, host and
+  service names and aliases, notes, acknowledgement and downtime comments, and
+  custom macro values) is now wrapped in an untrusted-data fence in every read
+  tool's result, and the server Instructions tell the model to treat everything
+  inside the markers strictly as data, never as instructions. A compromised
+  monitored host controls its own check output, so this is defense-in-depth against
+  prompt injection steering the model into the write surface. The markers cannot be
+  spoofed by field content, because the JSON serializer escapes the angle brackets
+  they are built from. To keep the guarantee unconditional, read tools no longer
+  emit a separate `structuredContent` value (which the MCP SDK would populate with
+  an unfenced second copy of the same data): the fenced text content is the sole
+  representation, and a consumer that wants the structured payload unwraps the fence
+  and parses the JSON between the markers. This changes the read-tool result shape:
+  a client that parsed the bare result text as JSON, or read `structuredContent`,
+  must now strip the fence first. (#80)
+- `centreon_resource_submit` and `centreon_resource_check` are now annotated as
+  destructive rather than additive creates, matching what they do: submit overwrites
+  a resource's live status and output, and check forces the engine to replace live
+  state. Clients that key their own guardrails off the destructive annotation now
+  treat them correctly, and they are refused in read-only mode. (#81)
 - Centreon client-call errors are now classified to a fixed, credential-safe
   description before they reach a server log or an MCP tool response, so a
   credential embedded in the base URL (`CENTREON_HOST`, or a caller-supplied

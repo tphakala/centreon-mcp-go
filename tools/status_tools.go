@@ -28,8 +28,8 @@ type PlatformStatus struct {
 // RegisterStatusTools registers all platform status tools. host is the
 // credential-redacted Centreon host reported in the response; the caller
 // supplies it already redacted (see RegisterAll).
-func RegisterStatusTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger, host string) {
-	mcp.AddTool(s, &mcp.Tool{
+func RegisterStatusTools(s *Registrar, client *centreon.Client, logger *slog.Logger, host string) {
+	addTool(s, &mcp.Tool{
 		Name:        "centreon_platform_status",
 		Description: "Return a combined live platform overview in one call: host status counts (up/down/unreachable), service status counts (ok/warning/critical/unknown), and the list of monitoring servers. The response also names the configured Centreon host (credentials redacted), or the literal (redacted host) when the configured URL is shaped so that the host cannot be identified without risking exposure of a credential. Use this for an at-a-glance health snapshot; for the individual pieces use centreon_monitoring_host_status_counts, centreon_monitoring_service_status_counts, or centreon_server_list. Read-only.",
 		Annotations: readOnlyTool("Platform status"),

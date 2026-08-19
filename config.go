@@ -29,11 +29,14 @@ type Config struct {
 	Token           string
 	AllowSelfSigned bool
 	AllowHTTP       bool
-	Transport       string
-	HTTPPort        int
-	HTTPHost        string
-	AuthMode        string
-	LogLevel        string
+	// ReadOnly gates the mutating tools. When true (MCP_READ_ONLY=true), tools
+	// that write to Centreon are still listed but refuse with a tool-level error.
+	ReadOnly  bool
+	Transport string
+	HTTPPort  int
+	HTTPHost  string
+	AuthMode  string
+	LogLevel  string
 	// AllowedHosts restricts the X-Centreon-Host header in gateway mode.
 	// Empty means no restriction (any host accepted).
 	AllowedHosts []string
@@ -94,6 +97,10 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	cfg.AllowHTTP, err = parseBoolEnv("CENTREON_ALLOW_HTTP")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ReadOnly, err = parseBoolEnv("MCP_READ_ONLY")
 	if err != nil {
 		return Config{}, err
 	}

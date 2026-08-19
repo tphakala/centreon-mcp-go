@@ -61,6 +61,8 @@ linters:
         linters:
           - goconst
   settings:
+    goconst:
+      ignore-tests: true
     dupl:
       threshold: 120
     gocognit:

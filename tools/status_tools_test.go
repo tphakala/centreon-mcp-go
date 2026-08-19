@@ -82,7 +82,7 @@ func TestPlatformStatusHandlerFn_CombinesResults(t *testing.T) {
 	}
 
 	var got PlatformStatus
-	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+	if err := json.Unmarshal([]byte(unwrapUntrusted(t, textOf(t, res))), &got); err != nil {
 		t.Fatalf("result is not valid JSON: %v", err)
 	}
 	if got.Hosts == nil || got.Hosts.Total != 11 {
