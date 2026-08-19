@@ -19,9 +19,15 @@ func RegisterServiceConfigTools(s *mcp.Server, client *centreon.Client, logger *
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_list_by_host",
-		Description: "List the stored service configurations attached to one host, identified by its hostID, with optional name search and pagination. Use this instead of centreon_service_list when you already know the parent host, and as the way to locate a specific service since the services configuration API cannot look one up by service ID. Returns page 1 with 30 results by default (maximum 100 per page) and reflects saved configuration, not live monitoring. Read-only.",
+		Description: "List the stored service configurations attached to one host, identified by its hostID, with optional name search and pagination. Use this instead of centreon_service_list when you already know the parent host, and to fetch one service's full stored configuration by its id use centreon_service_get. Returns page 1 with 30 results by default (maximum 100 per page) and reflects saved configuration, not live monitoring. Read-only.",
 		Annotations: readOnlyTool("List services by host"),
 	}, serviceListByHostHandler(client, logger))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "centreon_service_get",
+		Description: "Fetch the full stored configuration of one service by its numeric id, including check, notification, and flapping settings plus custom macros (per the Centreon 25.10 API the macros also include those inherited from service templates and commands). Use this after finding the id with centreon_service_list or centreon_service_list_by_host; for live runtime status use centreon_monitoring_resource_service_get instead. The per-service detail endpoint exists on Centreon 25.10 and later only, so on an older Centreon the tool reports it as unsupported on this Centreon version. Read-only.",
+		Annotations: readOnlyTool("Get service"),
+	}, serviceGetHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_service_create",
@@ -174,6 +180,37 @@ func serviceListByHostHandler(client *centreon.Client, logger *slog.Logger) func
 			return client.Services.ListByHost(ctx, in.HostID, opts...)
 		})
 	}
+}
+
+// serviceGetHandlerFn backs centreon_service_get. The per-service detail GET
+// carries custom macros but exists only on Centreon 25.10 and later; unlike
+// hostGetHandlerFn there is no macro-free list fallback (ServiceService has no
+// GetByID). On an older Centreon the per-id GET route is unregistered, so the
+// call returns a routing 404 that versionSensitiveReason renders with the precise
+// "API route not present" hint; a resource 404 (the service is genuinely missing)
+// or a proxy that strips the route body falls back to the ambiguous wording.
+// getDetail is injected for testing.
+func serviceGetHandlerFn(
+	getDetail func(context.Context, int) (*centreon.ServiceDetail, error),
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+		ctx = centreon.WithToolName(ctx, "centreon_service_get")
+		logger.Debug("centreon_service_get", "id", in.ID)
+		detail, err := getDetail(ctx, in.ID)
+		if err != nil {
+			reason := versionSensitiveReason(err)
+			logger.Error("failed: centreon_service_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get service %d: %s", in.ID, reason)
+			return res, anyVal, nil
+		}
+		res, anyVal := jsonResult(detail)
+		return res, anyVal, nil
+	}
+}
+
+func serviceGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return serviceGetHandlerFn(client.Services.Get, logger)
 }
 
 func serviceCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateServiceInput) (*mcp.CallToolResult, any, error) {

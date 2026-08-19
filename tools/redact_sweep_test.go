@@ -78,6 +78,17 @@ func TestToolHandlers_ErrorNeverEchoesCredential(t *testing.T) {
 		{"monitoring_service_timeline", func() (*mcp.CallToolResult, any, error) {
 			return monitoringServiceTimelineHandler(client, log)(ctx, req, MonitoringHostServiceListInput{HostID: 1, ServiceID: 1})
 		}},
+		{"service_get", func() (*mcp.CallToolResult, any, error) {
+			// The failing transport yields a *url.Error (not an *APIError), so
+			// versionSensitiveReason falls through to redact.Reason.
+			return serviceGetHandler(client, log)(ctx, req, IDInput{ID: 1})
+		}},
+		{"user_update", func() (*mcp.CallToolResult, any, error) {
+			// The *url.Error is not a routing 404, so the IsRouteNotFound branch
+			// is skipped and redact.Reason runs.
+			name := "renamed"
+			return userUpdateHandler(client, log)(ctx, req, UpdateUserInput{ID: 1, Name: &name})
+		}},
 	}
 
 	for _, tc := range cases {

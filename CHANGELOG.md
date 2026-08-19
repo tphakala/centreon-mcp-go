@@ -32,15 +32,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transparently falls back to the previous list lookup, which keeps the named
   objects but has no macros. `centreon_host_list` is unchanged (macros belong on
   the per-host get). (#49)
+- `centreon_service_get`: fetch one service's full stored configuration by its
+  numeric id, including custom macros (which, per the Centreon 25.10 API, also
+  cover macros inherited from service templates and commands). It mirrors
+  `centreon_host_get`, but because the services configuration API has no
+  macro-free per-id fallback, a Centreon older than 25.10 (where the per-service
+  detail GET route is not registered) reports it as unsupported on this Centreon
+  version rather than degrading to a macro-free shape. (#88)
 
 ### Changed
 
-- The `github.com/tphakala/centreon-go-client` dependency is updated to v2.0.0.
-  This adopts upstream fixes for tools this server already ships: downtime and
+- The `github.com/tphakala/centreon-go-client` dependency is updated to v2.1.0.
+  v2.0.0 adopted upstream fixes for tools this server already ships: downtime and
   token timestamps are truncated to whole seconds (Centreon 25.10 rejects
   fractional RFC3339), bulk resource operations normalize a nil resource list to
-  `[]`, and per-id monitoring detail decodes use the correct keys. It also demotes
-  client-side logging of a caller-cancelled request from error to debug. (#33)
+  `[]`, and per-id monitoring detail decodes use the correct keys; it also demotes
+  client-side logging of a caller-cancelled request from error to debug. v2.1.0
+  types time-period exceptions into `{id, day_range, time_range}` (any other
+  fields the server sends are dropped, and the key order becomes fixed), changing
+  the JSON shape that `centreon_time_period_get` and `centreon_time_period_list`
+  return, and adds the routing-404 classifier used by the version hints below.
+  On Centreon 25.10 the server returns exactly those fields, so the data is
+  unchanged there. (#33)
+- `centreon_user_update` now recognizes when the connected Centreon registers no
+  user-write route (a routing 404, as on Centreon 25.10 where users and contacts
+  are read-only through the v2 REST API) and reports that plainly instead of a
+  bare HTTP 404. Its own description and the two descriptions that point at it
+  note the 25.10 limitation. (#87)
+- `centreon_monitoring_service_metrics`, `centreon_monitoring_service_timeline`,
+  and `centreon_service_get` render a routing 404 (an endpoint absent on an older
+  Centreon) with a precise "API route not present" hint via the client's
+  `IsRouteNotFound` classifier; an ambiguous 404 keeps the previous "not found, or
+  unsupported on this Centreon version" wording. (#50, #51, #88)
 
 ### Security
 

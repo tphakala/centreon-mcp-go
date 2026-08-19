@@ -13,13 +13,13 @@ import (
 func RegisterUserTools(s *mcp.Server, client *centreon.Client, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_user_list",
-		Description: "Retrieve Centreon users (contacts), returning each user's id, name, alias, email, admin flag, and activation state, with an optional name search. To change a user's name, alias, or email use centreon_user_update; for the related grouping and template objects use centreon_contact_group_list or centreon_contact_template_list. Defaults to page 1 with 30 results per page (max 100) and matches the search term as a name substring. Read-only.",
+		Description: "Retrieve Centreon users (contacts), returning each user's id, name, alias, email, admin flag, and activation state, with an optional name search. To change a user's name, alias, or email use centreon_user_update (unavailable on Centreon 25.10, where users are read-only via the API); for the related grouping and template objects use centreon_contact_group_list or centreon_contact_template_list. Defaults to page 1 with 30 results per page (max 100) and matches the search term as a name substring. Read-only.",
 		Annotations: readOnlyTool("List users"),
 	}, userListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_user_update",
-		Description: "Apply a partial update to one existing user (contact) identified by its numeric id, changing only the name, alias, or email fields you supply and leaving the rest untouched. Use this after locating the target with centreon_user_list; to save user-scoped resource filters instead use centreon_user_filter_create. Sends a PATCH, so omitted fields are preserved, and reports the updated user id. Writes to Centreon.",
+		Description: "Apply a partial update to one existing user (contact) identified by its numeric id, changing only the name, alias, or email fields you supply and leaving the rest untouched. Use this after locating the target with centreon_user_list; to save user-scoped resource filters instead use centreon_user_filter_create. Sends a PATCH, so omitted fields are preserved, and reports the updated user id. On Centreon 25.10 the v2 REST API registers no user-write route, so this reports users as read-only there. Writes to Centreon.",
 		Annotations: updateTool("Update user"),
 	}, userUpdateHandler(client, logger))
 
@@ -43,7 +43,7 @@ func RegisterUserTools(s *mcp.Server, client *centreon.Client, logger *slog.Logg
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_user_filter_create",
-		Description: "Save a new user filter from a required name and an optional list of resource-status criteria, returning the new filter's numeric id. Use this to persist a reusable filter; to review existing filters first call centreon_user_filter_list, and to edit users themselves use centreon_user_update. Adds a new record without altering existing filters. Writes to Centreon.",
+		Description: "Save a new user filter from a required name and an optional list of resource-status criteria, returning the new filter's numeric id. Use this to persist a reusable filter; to review existing filters first call centreon_user_filter_list, and to edit users themselves use centreon_user_update (unavailable on Centreon 25.10, where users are read-only via the API). Adds a new record without altering existing filters. Writes to Centreon.",
 		Annotations: createTool("Create user filter"),
 	}, userFilterCreateHandler(client, logger))
 }
@@ -78,6 +78,19 @@ func userUpdateHandler(client *centreon.Client, logger *slog.Logger) func(ctx co
 			Email: in.Email,
 		}
 		if err := client.Users.Update(ctx, in.ID, req); err != nil {
+			if centreon.IsRouteNotFound(err) {
+				// Centreon 25.10 registers no user-write route: PATCH
+				// /configuration/users/{id} returns a routing 404, so users and
+				// contacts are read-only through the v2 REST API there (client
+				// users.go, live-verified on 25.10.16). Report that plainly instead
+				// of a bare "HTTP 404". IsRouteNotFound returns only a bool after
+				// the client vets the response body, so no error message reaches the
+				// log or the result (CWE-532).
+				const msg = "user update route not registered on this Centreon version (users are read-only via the v2 REST API, e.g. on 25.10)"
+				logger.Error("failed: centreon_user_update", "error", msg, "id", in.ID)
+				res, anyVal := errorResult("failed to update user %d: %s", in.ID, msg)
+				return res, anyVal, nil
+			}
 			reason := redact.Reason(err)
 			logger.Error("failed: centreon_user_update", "error", reason, "id", in.ID)
 			res, anyVal := errorResult("failed to update user %d: %s", in.ID, reason)

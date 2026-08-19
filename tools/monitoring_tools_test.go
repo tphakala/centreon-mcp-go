@@ -473,6 +473,17 @@ func TestVersionSensitiveReason_404GivesVersionHint(t *testing.T) {
 	if !strings.Contains(got, "unsupported on this Centreon version") {
 		t.Errorf("404 reason = %q, want version hint", got)
 	}
+	if strings.Contains(got, "API route not present") {
+		t.Errorf("a bare 404 (no route message) must use the ambiguous wording, got %q", got)
+	}
+	// A routing 404 the client classified gets the precise wording.
+	route := versionSensitiveReason(&centreon.APIError{HTTPStatus: http.StatusNotFound, Message: `No route found for "GET /x"`})
+	if !strings.Contains(route, "API route not present") {
+		t.Errorf("routing 404 reason = %q, want precise route hint", route)
+	}
+	if strings.Contains(route, "not found, or") {
+		t.Errorf("routing 404 must not use the ambiguous wording, got %q", route)
+	}
 	// A non-404 falls through to redact.Reason.
 	if got := versionSensitiveReason(&centreon.APIError{HTTPStatus: http.StatusInternalServerError}); !strings.Contains(got, "HTTP 500") {
 		t.Errorf("500 reason = %q, want HTTP 500 classification", got)
