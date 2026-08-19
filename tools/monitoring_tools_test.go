@@ -340,7 +340,7 @@ func TestMonitoringServiceMetricsHandler_ReturnsMetrics(t *testing.T) {
 		t.Fatalf("new client: %v", err)
 	}
 	handler := monitoringServiceMetricsHandler(client, testLogger(t))
-	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, HostServiceInput{HostID: 3, ServiceID: 8})
+	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, HostServiceInput{HostID: 3, ServiceID: 8})
 	if err != nil {
 		t.Fatalf("handler returned error: %v", err)
 	}
@@ -350,8 +350,31 @@ func TestMonitoringServiceMetricsHandler_ReturnsMetrics(t *testing.T) {
 	if !strings.HasSuffix(gotPath, "/monitoring/hosts/3/services/8/metrics") {
 		t.Errorf("path = %q, want suffix /monitoring/hosts/3/services/8/metrics", gotPath)
 	}
-	if !strings.Contains(textOf(t, res), `"rta"`) {
-		t.Errorf("expected metric name in output, got: %s", textOf(t, res))
+	// Assert the whole metric contract, not just the name, so a regression in any
+	// mapped field (id, unit, value, thresholds) is caught.
+	got, ok := anyVal.([]centreon.Metric)
+	if !ok {
+		t.Fatalf("anyVal type = %T, want []centreon.Metric", anyVal)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(metrics) = %d, want 1", len(got))
+	}
+	m := got[0]
+	if m.ID != 1 || m.Name != "rta" || m.Unit != "ms" {
+		t.Errorf("id/name/unit = %d/%q/%q, want 1/\"rta\"/\"ms\"", m.ID, m.Name, m.Unit)
+	}
+	for _, f := range []struct {
+		name string
+		got  *float64
+		want float64
+	}{
+		{"current_value", m.CurrentValue, 12.5},
+		{"warning_high_threshold", m.WarningHighThreshold, 100},
+		{"critical_high_threshold", m.CriticalHighThreshold, 200},
+	} {
+		if f.got == nil || *f.got != f.want {
+			t.Errorf("%s = %v, want %v", f.name, f.got, f.want)
+		}
 	}
 }
 
