@@ -67,6 +67,17 @@ func TestToolHandlers_ErrorNeverEchoesCredential(t *testing.T) {
 		{"notification_policy_host_get", func() (*mcp.CallToolResult, any, error) {
 			return notificationPolicyHostGetHandler(client, log)(ctx, req, HostIDInput{HostID: 1})
 		}},
+		{"host_get", func() (*mcp.CallToolResult, any, error) {
+			// The failing transport yields a *url.Error (not a 404), so the
+			// detail-error sink runs and no fallback is attempted.
+			return hostGetHandler(client, log)(ctx, req, IDInput{ID: 1})
+		}},
+		{"monitoring_service_metrics", func() (*mcp.CallToolResult, any, error) {
+			return monitoringServiceMetricsHandler(client, log)(ctx, req, HostServiceInput{HostID: 1, ServiceID: 1})
+		}},
+		{"monitoring_service_timeline", func() (*mcp.CallToolResult, any, error) {
+			return monitoringServiceTimelineHandler(client, log)(ctx, req, MonitoringHostServiceListInput{HostID: 1, ServiceID: 1})
+		}},
 	}
 
 	for _, tc := range cases {

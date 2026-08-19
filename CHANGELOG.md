@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `centreon_monitoring_service_metrics`: retrieve a service's current performance
+  metric values (name, unit, current value, and warning/critical thresholds) by
+  `hostID` and `serviceID`. A service with no performance data returns an empty
+  list, not an error. (#50)
+- `centreon_monitoring_service_timeline`: the service-scoped mirror of
+  `centreon_monitoring_host_timeline`, returning one service's chronological event
+  history (state changes, notifications, acknowledgements, downtime, comments) by
+  `hostID` and `serviceID`, with pagination. (#51)
+- `centreon_monitoring_resource_list` gains structured server-side filters:
+  `resourceTypes`, `statuses`, `statusTypes`, `states`, and the `hostGroups`,
+  `serviceGroups`, `hostCategories`, and `serviceCategories` name filters, on top
+  of the existing search, host, poller, and sort options. Multiple values within a
+  filter match as OR and the filters combine as AND. (#52)
+- `centreon_host_get` now returns the custom macros defined directly on a host,
+  along with the fuller per-host detail (SNMP, check-command, notification,
+  flapping, event-handler, and note/icon fields). It reads from the per-host detail
+  endpoint added in Centreon 25.10, whose shape differs from the list shape: the
+  monitoring-server, severity, and time-period relationships are reported as their
+  numeric IDs (`monitoring_server_id`, `severity_id`, `check_timeperiod_id`, and so
+  on) rather than as `{id, name}` objects. Against an older Centreon the tool
+  transparently falls back to the previous list lookup, which keeps the named
+  objects but has no macros. `centreon_host_list` is unchanged (macros belong on
+  the per-host get). (#49)
+
+### Changed
+
+- The `github.com/tphakala/centreon-go-client` dependency is updated to v2.0.0.
+  This adopts upstream fixes for tools this server already ships: downtime and
+  token timestamps are truncated to whole seconds (Centreon 25.10 rejects
+  fractional RFC3339), bulk resource operations normalize a nil resource list to
+  `[]`, and per-id monitoring detail decodes use the correct keys. It also demotes
+  client-side logging of a caller-cancelled request from error to debug. (#33)
+
 ### Security
 
 - Centreon client-call errors are now classified to a fixed, credential-safe
