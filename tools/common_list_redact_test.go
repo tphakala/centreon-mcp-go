@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 )
 
 // TestCommonListHandler_ErrorNeverEchoesCredential pins the single sink shared

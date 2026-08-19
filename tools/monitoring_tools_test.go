@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 )
 
 // applyOpts applies functional list options to a fresh ListOptions so tests can

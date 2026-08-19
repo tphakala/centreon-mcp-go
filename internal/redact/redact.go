@@ -20,7 +20,7 @@ import (
 	"net"
 	"net/url"
 
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 )
 
 // ErrCrossHostRedirect is the sentinel the redirect guard wraps so Reason can

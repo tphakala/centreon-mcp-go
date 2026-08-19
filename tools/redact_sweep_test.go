@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 )
 
 // failRoundTripper fails every request with a resolver error, so a client call

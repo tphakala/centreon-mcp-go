@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 )
 
 // TestHostCategoryGetHandlerFn_ErrorNeverEchoesCredential pins one config
