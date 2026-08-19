@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
@@ -19,7 +19,7 @@ func RegisterHostConfigTools(s *mcp.Server, client *centreon.Client, logger *slo
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "centreon_host_get",
-		Description: "Fetch the full stored configuration of a single host by its numeric ID, including address, templates, groups, categories, and check settings. Use this when you already know the host ID; to search or page through hosts use centreon_host_list, and for current up/down monitoring state use centreon_monitoring_host_get. Requires id and returns configuration only, never live status. Read-only.",
+		Description: "Fetch the full stored configuration of a single host by its numeric ID, including address, templates, groups, categories, check settings, and the custom macros defined directly on the host. Use this when you already know the host ID; to search or page through hosts use centreon_host_list (which omits macros), and for current up/down monitoring state use centreon_monitoring_host_get. Requires id and returns configuration only, never live status. Custom macros come from the per-host detail endpoint added in Centreon 25.10; against an older Centreon the tool still returns the host but without the macros field. Read-only.",
 		Annotations: readOnlyTool("Get host"),
 	}, hostGetHandler(client, logger))
 
@@ -222,13 +222,40 @@ func hostListHandler(client *centreon.Client, logger *slog.Logger) func(ctx cont
 	}
 }
 
-func hostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+// hostGetHandlerFn implements centreon_host_get. It prefers the per-host detail
+// GET (getDetail, Centreon 25.10+), which includes custom macros. That endpoint
+// is absent on older Centreon and answers 404, and it also answers 404 for a
+// genuinely missing host on 25.10; in either 404 case the handler falls back to
+// getByID, the version-independent list lookup that returns the host without
+// macros (and answers its own not-found error when the host really is gone). Any
+// non-404 detail error is returned as-is, without a second call.
+func hostGetHandlerFn(
+	getDetail func(context.Context, int) (*centreon.HostDetail, error),
+	getByID func(context.Context, int) (*centreon.Host, error),
+	logger *slog.Logger,
+) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
 		ctx = centreon.WithToolName(ctx, "centreon_host_get")
 		logger.Debug("centreon_host_get", "id", in.ID)
-		host, err := client.Hosts.GetByID(ctx, in.ID)
-		if err != nil {
+
+		detail, err := getDetail(ctx, in.ID)
+		if err == nil {
+			res, anyVal := jsonResult(detail)
+			return res, anyVal, nil
+		}
+		if !isNotFoundStatus(err) {
 			reason := redact.Reason(err)
+			logger.Error("failed: centreon_host_get", "error", reason, "id", in.ID)
+			res, anyVal := errorResult("failed to get host %d: %s", in.ID, reason)
+			return res, anyVal, nil
+		}
+
+		// Detail GET unavailable (older Centreon) or the host is missing: fall
+		// back to the macro-free list lookup, which distinguishes the two.
+		logger.Debug("centreon_host_get: per-host detail unavailable, falling back without macros", "id", in.ID)
+		host, ferr := getByID(ctx, in.ID)
+		if ferr != nil {
+			reason := redact.Reason(ferr)
 			logger.Error("failed: centreon_host_get", "error", reason, "id", in.ID)
 			res, anyVal := errorResult("failed to get host %d: %s", in.ID, reason)
 			return res, anyVal, nil
@@ -236,6 +263,10 @@ func hostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx conte
 		res, anyVal := jsonResult(host)
 		return res, anyVal, nil
 	}
+}
+
+func hostGetHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in IDInput) (*mcp.CallToolResult, any, error) {
+	return hostGetHandlerFn(client.Hosts.Get, client.Hosts.GetByID, logger)
 }
 
 func hostCreateHandler(client *centreon.Client, logger *slog.Logger) func(ctx context.Context, req *mcp.CallToolRequest, in CreateHostInput) (*mcp.CallToolResult, any, error) {

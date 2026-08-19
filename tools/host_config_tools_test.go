@@ -5,12 +5,153 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 )
+
+// ---- Host Get (macros via detail endpoint, #49) ----
+
+// TestHostGetHandlerFn_ReturnsMacrosFromDetail pins that centreon_host_get uses
+// the per-host detail GET (which carries macros) and does not fall back when it
+// succeeds. Making hostGetHandlerFn call getByID first turns this red.
+func TestHostGetHandlerFn_ReturnsMacrosFromDetail(t *testing.T) {
+	osVal := "linux"
+	detail := &centreon.HostDetail{ID: 7, Name: "web01", Macros: []centreon.HostMacro{{Name: "OS", Value: &osVal}}}
+	getDetail := func(_ context.Context, id int) (*centreon.HostDetail, error) {
+		if id != 7 {
+			t.Errorf("detail id = %d, want 7", id)
+		}
+		return detail, nil
+	}
+	getByID := func(_ context.Context, _ int) (*centreon.Host, error) {
+		t.Error("getByID must not be called when the detail GET succeeds")
+		return nil, errors.New("unexpected")
+	}
+	handler := hostGetHandlerFn(getDetail, getByID, testLogger(t))
+	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textOf(t, res))
+	}
+	got, ok := anyVal.(*centreon.HostDetail)
+	if !ok {
+		t.Fatalf("anyVal type = %T, want *centreon.HostDetail", anyVal)
+	}
+	if len(got.Macros) != 1 || got.Macros[0].Name != "OS" {
+		t.Errorf("macros = %+v, want one macro named OS", got.Macros)
+	}
+	if !strings.Contains(textOf(t, res), `"macros"`) {
+		t.Errorf("expected macros in JSON output, got: %s", textOf(t, res))
+	}
+}
+
+// TestHostGetHandlerFn_FallsBackToListWhenDetail404 pins the graceful path for a
+// Centreon older than 25.10 (or a missing host): a 404 from the detail GET falls
+// back to the macro-free list lookup. Dropping the isNotFoundStatus branch (so a
+// 404 becomes a hard error) turns this red.
+func TestHostGetHandlerFn_FallsBackToListWhenDetail404(t *testing.T) {
+	host := &centreon.Host{ID: 7, Name: "web01"}
+	var byIDCalled bool
+	getDetail := func(_ context.Context, _ int) (*centreon.HostDetail, error) {
+		return nil, &centreon.APIError{HTTPStatus: http.StatusNotFound, Message: "not found"}
+	}
+	getByID := func(_ context.Context, id int) (*centreon.Host, error) {
+		byIDCalled = true
+		if id != 7 {
+			t.Errorf("fallback id = %d, want 7", id)
+		}
+		return host, nil
+	}
+	handler := hostGetHandlerFn(getDetail, getByID, testLogger(t))
+	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textOf(t, res))
+	}
+	if !byIDCalled {
+		t.Error("expected fallback to getByID on a 404 detail response")
+	}
+	if _, ok := anyVal.(*centreon.Host); !ok {
+		t.Fatalf("anyVal type = %T, want *centreon.Host", anyVal)
+	}
+}
+
+// TestHostGetHandlerFn_DetailErrorNon404NoFallback pins that a non-404 detail
+// failure is returned directly, without a second (wasted) call to getByID.
+func TestHostGetHandlerFn_DetailErrorNon404NoFallback(t *testing.T) {
+	getDetail := func(_ context.Context, _ int) (*centreon.HostDetail, error) {
+		return nil, &centreon.APIError{HTTPStatus: http.StatusInternalServerError}
+	}
+	getByID := func(_ context.Context, _ int) (*centreon.Host, error) {
+		t.Error("getByID must not be called for a non-404 detail error")
+		return nil, errors.New("unexpected getByID call")
+	}
+	handler := hostGetHandlerFn(getDetail, getByID, testLogger(t))
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected an error result for a non-404 detail failure")
+	}
+}
+
+// TestHostGetHandlerFn_FallbackErrorReturnsError pins that when both the detail
+// GET and the fallback answer 404 (a genuinely missing host), the tool reports an
+// error rather than an empty success.
+func TestHostGetHandlerFn_FallbackErrorReturnsError(t *testing.T) {
+	getDetail := func(_ context.Context, _ int) (*centreon.HostDetail, error) {
+		return nil, &centreon.APIError{HTTPStatus: http.StatusNotFound}
+	}
+	getByID := func(_ context.Context, _ int) (*centreon.Host, error) {
+		return nil, &centreon.APIError{HTTPStatus: http.StatusNotFound}
+	}
+	handler := hostGetHandlerFn(getDetail, getByID, testLogger(t))
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 7})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected an error result when both detail and fallback 404")
+	}
+}
+
+// TestHostGetHandlerFn_ErrorNeverEchoesCredential pins that the detail-error sink
+// routes through redact.Reason: a mis-parsed base-URL credential reaches neither
+// the response nor the log. It also proves a credential-bearing *url.Error (not a
+// 404) does not trigger the fallback. Passing the raw err turns this red.
+func TestHostGetHandlerFn_ErrorNeverEchoesCredential(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	getDetail := func(_ context.Context, _ int) (*centreon.HostDetail, error) {
+		return nil, misparsedClientErr()
+	}
+	getByID := func(_ context.Context, _ int) (*centreon.Host, error) {
+		t.Error("getByID must not be called for a non-404 detail error")
+		return nil, errors.New("unexpected getByID call")
+	}
+	handler := hostGetHandlerFn(getDetail, getByID, logger)
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, IDInput{ID: 99})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected an error result")
+	}
+	assertNoCredential(t, textOf(t, res))
+	assertNoCredential(t, buf.String())
+	if !strings.Contains(textOf(t, res), "host 99") {
+		t.Errorf("want the target identified, got: %q", textOf(t, res))
+	}
+}
 
 // TestHostCategoryGetHandlerFn_ErrorNeverEchoesCredential pins one config
 // handler end to end (#63, #71): a mis-parsed base-URL credential must reach

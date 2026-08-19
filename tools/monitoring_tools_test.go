@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 )
 
 // applyOpts applies functional list options to a fresh ListOptions so tests can
@@ -270,5 +270,211 @@ func TestBuildMonitoringListOptions_NeverAddsSearchOrSort(t *testing.T) {
 	}
 	if o.Limit != 10 || o.Page != 2 {
 		t.Errorf("limit/page = %d/%d, want 10/2", o.Limit, o.Page)
+	}
+}
+
+// ---- Resource list array filters (#52) ----
+
+func TestBuildMonitoringResourceListOptions_ArrayFilters(t *testing.T) {
+	in := &MonitoringResourceListInput{
+		ResourceTypes:     []string{"service"},
+		Statuses:          []string{"CRITICAL", "WARNING"},
+		StatusTypes:       []string{"hard"},
+		States:            []string{"unhandled_problems"},
+		HostGroups:        []string{"Linux"},
+		ServiceGroups:     []string{"HTTP"},
+		HostCategories:    []string{"prod"},
+		ServiceCategories: []string{"web"},
+	}
+	opts, err := buildMonitoringResourceListOptions(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := applyOpts(opts).ArrayFilters
+	want := map[string][]string{
+		"types":                  {"service"},
+		"statuses":               {"CRITICAL", "WARNING"},
+		"status_types":           {"hard"},
+		"states":                 {"unhandled_problems"},
+		"hostgroup_names":        {"Linux"},
+		"servicegroup_names":     {"HTTP"},
+		"host_category_names":    {"prod"},
+		"service_category_names": {"web"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ArrayFilters = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildMonitoringResourceListOptions_ArrayFiltersDropBlanks(t *testing.T) {
+	in := &MonitoringResourceListInput{
+		Statuses:   []string{" ", ""},
+		HostGroups: []string{"  Linux  ", ""},
+	}
+	opts, err := buildMonitoringResourceListOptions(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	af := applyOpts(opts).ArrayFilters
+	if _, ok := af["statuses"]; ok {
+		t.Errorf("blank-only statuses must emit no filter, got %v", af["statuses"])
+	}
+	if got := af["hostgroup_names"]; !reflect.DeepEqual(got, []string{"Linux"}) {
+		t.Errorf("hostgroup_names = %v, want [Linux] (trimmed, blank dropped)", got)
+	}
+}
+
+// ---- Service metrics (#50) ----
+
+func TestMonitoringServiceMetricsHandler_ReturnsMetrics(t *testing.T) {
+	var gotPath string
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":1,"name":"rta","unit":"ms","current_value":12.5,"warning_high_threshold":100,"critical_high_threshold":200}]`))
+	}))
+	defer fake.Close()
+
+	client, err := centreon.NewClient(fake.URL, centreon.WithAPIToken("t"))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	handler := monitoringServiceMetricsHandler(client, testLogger(t))
+	res, anyVal, err := handler(t.Context(), &mcp.CallToolRequest{}, HostServiceInput{HostID: 3, ServiceID: 8})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textOf(t, res))
+	}
+	if !strings.HasSuffix(gotPath, "/monitoring/hosts/3/services/8/metrics") {
+		t.Errorf("path = %q, want suffix /monitoring/hosts/3/services/8/metrics", gotPath)
+	}
+	// Assert the whole metric contract, not just the name, so a regression in any
+	// mapped field (id, unit, value, thresholds) is caught.
+	got, ok := anyVal.([]centreon.Metric)
+	if !ok {
+		t.Fatalf("anyVal type = %T, want []centreon.Metric", anyVal)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(metrics) = %d, want 1", len(got))
+	}
+	m := got[0]
+	if m.ID != 1 || m.Name != "rta" || m.Unit != "ms" {
+		t.Errorf("id/name/unit = %d/%q/%q, want 1/\"rta\"/\"ms\"", m.ID, m.Name, m.Unit)
+	}
+	for _, f := range []struct {
+		name string
+		got  *float64
+		want float64
+	}{
+		{"current_value", m.CurrentValue, 12.5},
+		{"warning_high_threshold", m.WarningHighThreshold, 100},
+		{"critical_high_threshold", m.CriticalHighThreshold, 200},
+	} {
+		if f.got == nil || *f.got != f.want {
+			t.Errorf("%s = %v, want %v", f.name, f.got, f.want)
+		}
+	}
+}
+
+// TestMonitoringServiceMetricsHandler_EmptyArrayNotNull pins that a service with
+// no performance data (the client maps its 404 "metrics not found" to a nil
+// slice) is surfaced as an empty JSON array, not null. Removing the nil-to-empty
+// normalization turns this red.
+func TestMonitoringServiceMetricsHandler_EmptyArrayNotNull(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":404,"message":"metrics not found"}`))
+	}))
+	defer fake.Close()
+
+	client, err := centreon.NewClient(fake.URL, centreon.WithAPIToken("t"))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	handler := monitoringServiceMetricsHandler(client, testLogger(t))
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, HostServiceInput{HostID: 3, ServiceID: 8})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("a no-perfdata 404 must not be an error, got: %s", textOf(t, res))
+	}
+	if got := strings.TrimSpace(textOf(t, res)); got != "[]" {
+		t.Errorf("output = %q, want []", got)
+	}
+}
+
+// TestMonitoringServiceMetricsHandler_VersionHintOnOther404 pins that a 404 the
+// client does NOT swallow (e.g. a route absent on an older Centreon) is reported
+// with the version hint from versionSensitiveReason.
+func TestMonitoringServiceMetricsHandler_VersionHintOnOther404(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":404,"message":"No route found"}`))
+	}))
+	defer fake.Close()
+
+	client, err := centreon.NewClient(fake.URL, centreon.WithAPIToken("t"))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	handler := monitoringServiceMetricsHandler(client, testLogger(t))
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, HostServiceInput{HostID: 3, ServiceID: 8})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected an error result for a non-perfdata 404")
+	}
+	if !strings.Contains(textOf(t, res), "unsupported on this Centreon version") {
+		t.Errorf("expected version hint, got: %s", textOf(t, res))
+	}
+}
+
+// ---- Service timeline (#51) ----
+
+func TestMonitoringServiceTimelineHandler_SendsPathAndPaging(t *testing.T) {
+	var gotPath, gotLimit, gotPage string
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotLimit = r.URL.Query().Get("limit")
+		gotPage = r.URL.Query().Get("page")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":[],"meta":{"page":2,"limit":10,"total":0}}`))
+	}))
+	defer fake.Close()
+
+	client, err := centreon.NewClient(fake.URL, centreon.WithAPIToken("t"))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	handler := monitoringServiceTimelineHandler(client, testLogger(t))
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, MonitoringHostServiceListInput{HostID: 3, ServiceID: 8, Page: 2, Limit: 10})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textOf(t, res))
+	}
+	if !strings.HasSuffix(gotPath, "/monitoring/hosts/3/services/8/timeline") {
+		t.Errorf("path = %q, want suffix /monitoring/hosts/3/services/8/timeline", gotPath)
+	}
+	if gotLimit != "10" || gotPage != "2" {
+		t.Errorf("paging params: limit=%q page=%q, want 10/2", gotLimit, gotPage)
+	}
+}
+
+func TestVersionSensitiveReason_404GivesVersionHint(t *testing.T) {
+	got := versionSensitiveReason(&centreon.APIError{HTTPStatus: http.StatusNotFound})
+	if !strings.Contains(got, "unsupported on this Centreon version") {
+		t.Errorf("404 reason = %q, want version hint", got)
+	}
+	// A non-404 falls through to redact.Reason.
+	if got := versionSensitiveReason(&centreon.APIError{HTTPStatus: http.StatusInternalServerError}); !strings.Contains(got, "HTTP 500") {
+		t.Errorf("500 reason = %q, want HTTP 500 classification", got)
 	}
 }

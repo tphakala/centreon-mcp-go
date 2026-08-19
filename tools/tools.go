@@ -3,11 +3,13 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	centreon "github.com/tphakala/centreon-go-client"
+	centreon "github.com/tphakala/centreon-go-client/v2"
 	"github.com/tphakala/centreon-mcp-go/internal/redact"
 )
 
@@ -78,6 +80,15 @@ type MonitoringHostIDListInput struct {
 	HostID int `json:"hostID"           jsonschema:"Host ID"`
 	Page   int `json:"page,omitempty"   jsonschema:"Page number (default 1)"`
 	Limit  int `json:"limit,omitempty"  jsonschema:"Results per page (default 30, max 100)"`
+}
+
+// MonitoringHostServiceListInput is the input for service-scoped monitoring list
+// tools (service timeline), which support pagination only.
+type MonitoringHostServiceListInput struct {
+	HostID    int `json:"hostID"           jsonschema:"Host ID"`
+	ServiceID int `json:"serviceID"        jsonschema:"Service ID"`
+	Page      int `json:"page,omitempty"   jsonschema:"Page number (default 1)"`
+	Limit     int `json:"limit,omitempty"  jsonschema:"Results per page (default 30, max 100)"`
 }
 
 // IDInput is the common input for single-resource tools.
@@ -208,6 +219,20 @@ func buildListOptions(in ListInput) []centreon.ListOption {
 // slice for monitoring endpoints that support pagination only.
 func buildMonitoringListOptions(in MonitoringListInput) []centreon.ListOption {
 	return pagingOptions(in.Page, in.Limit)
+}
+
+// isNotFoundStatus reports whether err is a Centreon *APIError carrying HTTP 404.
+// A 404 is ambiguous: the resource may be genuinely missing, or the route may be
+// absent on an older Centreon. Callers decide what to do with it: the host-detail
+// handler treats it as the signal to fall back to a version-independent lookup,
+// while the service metrics and timeline handlers render it as a version hint. It
+// reads only the trusted HTTPStatus integer, never the error's message, so it
+// cannot leak a credential (see internal/redact).
+func isNotFoundStatus(err error) bool {
+	if apiErr, ok := errors.AsType[*centreon.APIError](err); ok {
+		return apiErr.HTTPStatus == http.StatusNotFound
+	}
+	return false
 }
 
 // ListRequester abstracts any client List method.
