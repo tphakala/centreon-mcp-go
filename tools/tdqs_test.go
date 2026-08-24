@@ -62,19 +62,7 @@ func TestTDQS_ToolDefinitionsQuality(t *testing.T) {
 	s := mcp.NewServer(&mcp.Implementation{Name: "centreon-mcp-go", Version: "test"}, nil)
 	RegisterAll(s, &centreon.Client{}, nil, "https://tdqs.example.com", false)
 
-	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	ss, err := s.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	t.Cleanup(func() { _ = ss.Close() })
-
-	c := mcp.NewClient(&mcp.Implementation{Name: "tdqs-test", Version: "0"}, nil)
-	cs, err := c.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	t.Cleanup(func() { _ = cs.Close() })
+	cs := connectServerSession(t, ctx, s)
 
 	count := 0
 	for tool, iterErr := range cs.Tools(ctx, nil) {

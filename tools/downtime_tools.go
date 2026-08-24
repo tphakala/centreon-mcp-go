@@ -139,7 +139,7 @@ func downtimeHostListHandler(client *centreon.Client, logger *slog.Logger) func(
 			res, anyVal := errorResult("failed to list downtimes for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }
@@ -157,7 +157,7 @@ func downtimeServiceListHandler(client *centreon.Client, logger *slog.Logger) fu
 			res, anyVal := errorResult("failed to list downtimes for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }

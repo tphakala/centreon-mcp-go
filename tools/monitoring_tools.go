@@ -99,7 +99,7 @@ func monitoringHostListHandler(client *centreon.Client, logger *slog.Logger) fun
 			return res, anyVal, nil
 		}
 		logger.Debug("centreon_monitoring_host_list completed", "results", len(resp.Result), "total", resp.Meta.Total)
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }
@@ -133,7 +133,7 @@ func monitoringHostServicesHandler(client *centreon.Client, logger *slog.Logger)
 			res, anyVal := errorResult("failed to list services for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }
@@ -151,7 +151,7 @@ func monitoringHostTimelineHandler(client *centreon.Client, logger *slog.Logger)
 			res, anyVal := errorResult("failed to get timeline for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }
@@ -185,7 +185,7 @@ func monitoringServiceListHandler(client *centreon.Client, logger *slog.Logger) 
 			return res, anyVal, nil
 		}
 		logger.Debug("centreon_monitoring_service_list completed", "results", len(resp.Result), "total", resp.Meta.Total)
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }
@@ -239,7 +239,7 @@ func monitoringServiceTimelineHandler(client *centreon.Client, logger *slog.Logg
 			res, anyVal := errorResult("failed to get timeline for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }
@@ -437,7 +437,7 @@ func monitoringResourceListHandler(client *centreon.Client, logger *slog.Logger)
 			return res, anyVal, nil
 		}
 		logger.Debug("centreon_monitoring_resource_list completed", "results", len(resp.Result), "total", resp.Meta.Total)
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }

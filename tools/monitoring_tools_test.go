@@ -216,6 +216,38 @@ func TestMonitoringResourceListHandler_SendsSearchAndSortParams(t *testing.T) {
 	}
 }
 
+// TestMonitoringListHandler_NilResultSerializesAsArray pins #85 across the
+// monitoring list surface, not only the commonListHandler tools: a 204 No Content
+// leaves the client's Result nil, which must still serialize as [] not null (the
+// monitoring handlers route through listResult like every other list tool).
+func TestMonitoringListHandler_NilResultSerializesAsArray(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer fake.Close()
+
+	client, err := centreon.NewClient(fake.URL, centreon.WithAPIToken("t"))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	handler := monitoringHostListHandler(client, testLogger(t))
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, MonitoringListInput{})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textOf(t, res))
+	}
+	text := textOf(t, res)
+	if strings.Contains(text, `"result": null`) {
+		t.Errorf("nil Result must not serialize as null, got: %q", text)
+	}
+	if !strings.Contains(text, `"result": []`) {
+		t.Errorf("nil Result must serialize as an empty array, got: %q", text)
+	}
+}
+
 func TestMonitoringResourceListHandler_InvalidInputSkipsAPI(t *testing.T) {
 	var calls atomic.Int64
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

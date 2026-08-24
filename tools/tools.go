@@ -91,6 +91,15 @@ func deleteTool(title string) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{Title: title, DestructiveHint: new(true), IdempotentHint: true, OpenWorldHint: new(true)}
 }
 
+// forceCheckTool annotates a tool that forces the monitoring engine to run an
+// on-demand active check. It is destructive (it overwrites the resource's live
+// status and output) but, unlike updateTool, NOT idempotent: each call schedules a
+// fresh check, so a client that honors IdempotentHint must not auto-retry it (#91).
+// It carries no ReadOnlyHint, so read-only mode still refuses it.
+func forceCheckTool(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{Title: title, DestructiveHint: new(true), IdempotentHint: false, OpenWorldHint: new(true)}
+}
+
 // ListInput is the common input for list tools.
 type ListInput struct {
 	Page   int    `json:"page,omitempty"   jsonschema:"Page number (default 1)"`
@@ -220,6 +229,28 @@ func jsonResult(data any) (res *mcp.CallToolResult, anyVal any) {
 	}, nil
 }
 
+// normalizeList replaces a nil Result slice with an empty one, so a list response
+// serializes as an empty array rather than null. The client returns a nil slice for
+// a 204 No Content, a body with `result: null`, or a body that omits `result`, all
+// of which would otherwise become `"result": null` and force a consumer to
+// special-case null (#85). It is used both by listResult (the top-level list-tool
+// path) and directly by composite tools that embed a ListResponse field.
+func normalizeList[T any](resp *centreon.ListResponse[T]) {
+	if resp != nil && resp.Result == nil {
+		resp.Result = []T{}
+	}
+}
+
+// listResult serializes a paginated list response, normalizing a nil Result slice
+// first so the output is always a JSON array, never null (#85). Every tool whose
+// result IS a *centreon.ListResponse[T] routes through here; a composite tool that
+// merely embeds a ListResponse field calls normalizeList on that field directly
+// (see centreon_platform_status).
+func listResult[T any](resp *centreon.ListResponse[T]) (res *mcp.CallToolResult, anyVal any) {
+	normalizeList(resp)
+	return jsonResult(resp)
+}
+
 // errorResult builds an error result with IsError: true.
 func errorResult(format string, args ...any) (res *mcp.CallToolResult, anyVal any) {
 	text := fmt.Sprintf(format, args...)
@@ -322,6 +353,6 @@ func commonListHandler[T any](
 
 	logger.Debug(toolName+" completed", "results", len(resp.Result), "total", resp.Meta.Total, "page", resp.Meta.Page)
 
-	res, anyVal := jsonResult(resp)
+	res, anyVal := listResult(resp)
 	return res, anyVal, nil
 }

@@ -48,19 +48,20 @@ func TestHostAllowed(t *testing.T) {
 	}
 }
 
-// TestGatewayServer_HostAllowlist exercises the enforcement point itself, not
-// just the hostAllowed helper: it confirms gatewayServer rejects a host that is
-// not on the allowlist (returns nil) and admits one that is. A token is
-// supplied so the token branch is taken and no network login is attempted.
+// TestGatewayServer_HostAllowlist exercises the enforcement point itself, not just
+// the hostAllowed helper: gatewayServer must reject a host off the allowlist and a
+// cleartext scheme, and admit an allowed one. Since #79 an accepted host must answer
+// the token-validation read, so the accept cases point at a fake that accepts any
+// token. The reject cases assert on the specific rejection-reason LOG, not only a
+// nil server: deleting the allowlist or scheme check would fall through to token
+// validation, which also returns nil against the unreachable reject host, so a bare
+// nil check could not tell the two rejections apart (or catch either check's
+// removal).
 func TestGatewayServer_HostAllowlist(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
 	cache := NewTokenCache(time.Minute)
 
-	// Since #79, gatewayServer validates a caller-supplied token before building, so
-	// an accepted host must actually answer the validation read. This fake accepts
-	// any token, keeping the focus of each subtest on allowlist/scheme enforcement
-	// rather than authentication. It is loopback http, hence AllowHTTP on the accept
-	// cases.
+	// A fake Centreon that accepts any token, so the accept cases reach a real
+	// (loopback http, hence AllowHTTP) host and clear token validation.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{})
@@ -68,6 +69,7 @@ func TestGatewayServer_HostAllowlist(t *testing.T) {
 	fake := httptest.NewServer(mux)
 	defer fake.Close()
 
+	discard := slog.New(slog.DiscardHandler)
 	newReq := func(host string) *http.Request {
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
 		r.Header.Set("X-Centreon-Host", host)
@@ -76,36 +78,46 @@ func TestGatewayServer_HostAllowlist(t *testing.T) {
 	}
 
 	t.Run("host not in allowlist is rejected", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
 		cfg := &Config{AllowedHosts: []string{"https://allowed.example.com"}}
 		if s := gatewayServer(newReq("https://evil.example.com"), cfg, cache, logger, nil); s != nil {
 			t.Error("expected nil server for host not in allowlist, got non-nil")
+		}
+		if !strings.Contains(buf.String(), "not in allowlist") {
+			t.Errorf("expected the allowlist-rejection log (deleting the allowlist check must be caught here), got: %s", buf.String())
 		}
 	})
 
 	t.Run("host in allowlist is accepted", func(t *testing.T) {
 		cfg := &Config{AllowHTTP: true, AllowedHosts: []string{fake.URL}}
-		if s := gatewayServer(newReq(fake.URL), cfg, cache, logger, nil); s == nil {
+		if s := gatewayServer(newReq(fake.URL), cfg, cache, discard, nil); s == nil {
 			t.Error("expected non-nil server for allowed host, got nil")
 		}
 	})
 
 	t.Run("empty allowlist accepts any host", func(t *testing.T) {
 		cfg := &Config{AllowHTTP: true}
-		if s := gatewayServer(newReq(fake.URL), cfg, cache, logger, nil); s == nil {
+		if s := gatewayServer(newReq(fake.URL), cfg, cache, discard, nil); s == nil {
 			t.Error("expected non-nil server when allowlist is empty, got nil")
 		}
 	})
 
 	t.Run("http host rejected when AllowHTTP is false", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
 		cfg := &Config{}
 		if s := gatewayServer(newReq("http://plain.example.com"), cfg, cache, logger, nil); s != nil {
 			t.Error("expected nil server for cleartext http host without CENTREON_ALLOW_HTTP, got non-nil")
+		}
+		if !strings.Contains(buf.String(), "host rejected") {
+			t.Errorf("expected the scheme-rejection log (deleting the scheme check must be caught here), got: %s", buf.String())
 		}
 	})
 
 	t.Run("http host accepted when AllowHTTP is true", func(t *testing.T) {
 		cfg := &Config{AllowHTTP: true}
-		if s := gatewayServer(newReq(fake.URL), cfg, cache, logger, nil); s == nil {
+		if s := gatewayServer(newReq(fake.URL), cfg, cache, discard, nil); s == nil {
 			t.Error("expected non-nil server for http host with CENTREON_ALLOW_HTTP, got nil")
 		}
 	})

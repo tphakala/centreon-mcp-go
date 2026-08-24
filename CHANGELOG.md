@@ -63,6 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modes, failing fast on a bad or expired token. Like password-mode's existing
   login-at-boot, this means an unreachable platform now blocks startup instead
   of the server starting and failing on the first tool call. (#82)
+- In gateway (multi-tenant HTTP) mode, a caller-supplied `X-Centreon-Token` is now
+  validated against Centreon (a `/monitoring/hosts/status` read) before the
+  per-request server is built. A token that is invalid, expired, or lacks
+  realtime-monitoring read access is now rejected at connection time rather than
+  succeeding and then failing on the first tool call. This is the gateway analog of
+  the env and stdio token boot-validation above (#82). (#79)
 - The `github.com/tphakala/centreon-go-client` dependency is updated to v2.1.0.
   v2.0.0 adopted upstream fixes for tools this server already ships: downtime and
   token timestamps are truncated to whole seconds (Centreon 25.10 rejects
@@ -85,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Centreon) with a precise "API route not present" hint via the client's
   `IsRouteNotFound` classifier; an ambiguous 404 keeps the previous "not found, or
   unsupported on this Centreon version" wording. (#50, #51, #88)
+- List tool results now always serialize `result` as a JSON array. Previously a
+  successful list whose underlying result was a nil slice (a 204 No Content, or a
+  body with `result: null` or no `result` field) serialized as `"result": null`,
+  forcing a client to special-case null; it is now `"result": []`. (#85)
+- `centreon_resource_check` no longer advertises `idempotentHint`. Forcing an
+  on-demand check schedules a fresh check on every call, so it is destructive but
+  not idempotent; a client honoring the hint could otherwise auto-retry and trigger
+  repeated checks. `centreon_resource_submit`, which overwrites to a fixed state,
+  keeps `idempotentHint`. (#91)
 
 ### Security
 
@@ -122,22 +137,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reachable of the two, since such a host passes startup validation and runs
   normally. It leaked through four paths, including a bracketed-IPv6 carve-out and
   a tail search that both looked for a raw `:` only (CWE-532). (#68, #75)
-- In gateway (multi-tenant HTTP) mode the caller-supplied `X-Centreon-Host` header
-  is now length-capped (2048 bytes) before it reaches host redaction, and the HTTP
-  server caps total request-header size at 64 KiB instead of Go's 1 MiB default.
-  Previously an unauthenticated request could send a ~1 MiB header that reached the
+- The HTTP server now caps total request-header size at 64 KiB instead of Go's
+  1 MiB default, in both env-auth and gateway HTTP transport. Additionally, in
+  gateway (multi-tenant HTTP) mode the caller-supplied `X-Centreon-Host` header is
+  length-capped (2048 bytes) before it reaches host redaction. Previously an
+  unauthenticated gateway request could send a ~1 MiB header that reached the
   credential-redaction path before any authentication check, costing tens of
   milliseconds and megabytes of allocation per request, an unauthenticated DoS
   lever. (#76)
 - In gateway mode a caller-supplied `X-Centreon-Token` is now validated against
   Centreon before the per-request tool registry is built, so an unauthenticated
   caller can no longer force that build (measured at tens of thousands of
-  allocations per request) with an arbitrary token. A token that fails validation is
-  now rejected when the connection is established rather than surfacing later on the
-  first tool call, and successful validations are cached for the token cache's
-  lifetime so a repeat caller pays no extra round-trip. The per-request registry
-  rebuild for already-valid callers is tracked as a separate performance
-  follow-up. (#79)
+  allocations per request) with an arbitrary token. Successful validations are
+  cached (until the token cache's TTL elapses or the entry is evicted) so a repeat
+  caller pays no extra round-trip. The per-request registry rebuild for
+  already-valid callers is tracked as a separate performance follow-up (#94). (#79)
 
 ### Changed
 

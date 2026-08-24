@@ -527,10 +527,11 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 // false if it fails. A successful validation is remembered in tokenCache so a repeat
 // caller does not pay an upstream round-trip per request; the entry uses an EMPTY
 // stored token as a "validated" sentinel. The empty value is deliberate: it is the
-// token PARAMETER that carries the cache key, and shutdown's Drain/logoutCachedToken
-// no-ops on an empty stored token, so this caller-owned API token is never logged
-// out from under its owner. Do not "simplify" by storing the token itself: that
-// would make shutdown try to log out a token we do not own.
+// token PARAMETER that carries the cache key, and at shutdown logoutCachedToken
+// no-ops on an empty stored token (Drain still returns the entry; only the logout
+// is skipped), so this caller-owned API token is never logged out from under its
+// owner. Do not "simplify" by storing the token itself: that would make shutdown
+// try to log out a token we do not own.
 func validateGatewayToken(ctx context.Context, tokenCache *TokenCache, client *centreon.Client, host, token string, logger *slog.Logger) bool {
 	if _, ok := tokenCache.Get(host, "", token); ok {
 		return true
