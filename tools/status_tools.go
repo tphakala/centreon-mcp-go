@@ -124,6 +124,9 @@ func platformStatusHandlerFn(
 			return res, anyVal, nil
 		}
 
+		// Normalize the embedded server list so a nil Result nests as [] not null,
+		// the same guarantee the dedicated list tools give (#85).
+		normalizeList(servers)
 		status := PlatformStatus{
 			Host:     host,
 			Hosts:    hosts,

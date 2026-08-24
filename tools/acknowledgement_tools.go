@@ -115,7 +115,7 @@ func acknowledgementHostListHandler(client *centreon.Client, logger *slog.Logger
 			res, anyVal := errorResult("failed to list acknowledgements for host %d: %s", in.HostID, reason)
 			return res, anyVal, nil
 		}
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }
@@ -133,7 +133,7 @@ func acknowledgementServiceListHandler(client *centreon.Client, logger *slog.Log
 			res, anyVal := errorResult("failed to list acknowledgements for service (host=%d, service=%d): %s", in.HostID, in.ServiceID, reason)
 			return res, anyVal, nil
 		}
-		res, anyVal := jsonResult(resp)
+		res, anyVal := listResult(resp)
 		return res, anyVal, nil
 	}
 }

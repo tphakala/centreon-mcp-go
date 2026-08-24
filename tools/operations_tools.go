@@ -27,7 +27,7 @@ func RegisterOperationsTools(s *Registrar, client *centreon.Client, logger *slog
 	addTool(s, &mcp.Tool{
 		Name:        "centreon_resource_check",
 		Description: "Force the monitoring engine to run an active check of a host or service right now instead of waiting for its next scheduled check, identifying the resource by type (host or service) and id, plus the parent host id for a service. Use this to refresh state on demand after a suspected recovery; use centreon_resource_submit instead to push an externally computed result rather than triggering the engine's own check. The check runs asynchronously and updates the resource's live status and output once it completes. Writes to Centreon.",
-		Annotations: updateTool("Force resource check"),
+		Annotations: forceCheckTool("Force resource check"),
 	}, bulkCheckHandler(client, logger))
 
 	addTool(s, &mcp.Tool{

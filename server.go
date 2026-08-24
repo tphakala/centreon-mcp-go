@@ -44,6 +44,23 @@ const (
 	tokenCacheTTL     = 50 * time.Minute
 	httpClientTimeout = 30 * time.Second
 
+	// maxHostHeaderBytes caps the length of the gateway X-Centreon-Host request
+	// header. In gateway mode that header is attacker-controlled and reaches the
+	// credential-redaction path (safeHost) before any authentication, so an
+	// unbounded value turns an unauthenticated request into an O(len) redaction
+	// cost (issue #76). A real Centreon base URL is a few hundred bytes. The value
+	// is sourced from maxCachedHostLen (token_cache.go), the existing bound on a
+	// retained host, so the two host-length limits share one source and cannot
+	// drift apart.
+	maxHostHeaderBytes = maxCachedHostLen
+	// maxHeaderBytes caps the total request-header size the HTTP server will parse,
+	// replacing net/http's 1 MiB default (http.DefaultMaxHeaderBytes) with a value
+	// 16x smaller. The MCP streamable-HTTP transport needs only a handful of small
+	// headers, so 64 KiB is generous; oversized headers get a 431 before any
+	// handler runs, so an unauthenticated caller cannot make the server buffer up to
+	// a megabyte per request (issue #76).
+	maxHeaderBytes = 64 << 10
+
 	// maxRedirects caps a redirect chain, matching net/http's default policy that
 	// noCrossHostRedirect replaces: installing a custom CheckRedirect removes the
 	// stdlib's own 10-redirect cap, so the policy must re-impose one.
@@ -360,6 +377,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 		ReadHeaderTimeout: readHeaderTimeout,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
 	// serveCtx lets the shutdown goroutine run cleanup on a ListenAndServe startup
@@ -434,6 +452,16 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		return nil
 	}
 
+	// Bound the attacker-controlled host BEFORE it reaches safeHost, hostAllowed or
+	// any other work: safeHost's redaction cost scales with input length, and this
+	// runs on an unauthenticated request, so an unbounded header is a DoS lever
+	// (issue #76). Only the length is logged, never the (potentially huge) host
+	// content, which is the cost being defended against.
+	if len(host) > maxHostHeaderBytes {
+		logger.Error("gateway: X-Centreon-Host header too long", "len", len(host), "max", maxHostHeaderBytes)
+		return nil
+	}
+
 	if !hostAllowed(host, cfg.AllowedHosts) {
 		logger.Error("gateway: host not in allowlist", "host", safeHost(host))
 		return nil
@@ -480,8 +508,41 @@ func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger 
 		}
 	}
 
+	// A caller-supplied token (token != "") skips the password login above, so
+	// nothing has authenticated it yet. Validate it before building the per-request
+	// tool registry, so an unauthenticated caller cannot force a registry build with
+	// an arbitrary token (issue #79). Anchor on the request header token, NOT
+	// gwCfg.Token: a token minted by our own password login (the cache path above)
+	// is already trusted and must not be revalidated.
+	if token != "" && !validateGatewayToken(r.Context(), tokenCache, client, host, token, logger) {
+		return nil
+	}
+
 	logger.Debug("gateway: created per-request client", "host", safeHost(host))
 	return buildServer(client, logger, displayHost(host), cfg.ReadOnly)
+}
+
+// validateGatewayToken authenticates a caller-supplied gateway token against
+// Centreon before the per-request tool registry is built (issue #79), returning
+// false if it fails. A successful validation is remembered in tokenCache so a repeat
+// caller does not pay an upstream round-trip per request; the entry uses an EMPTY
+// stored token as a "validated" sentinel. The empty value is deliberate: it is the
+// token PARAMETER that carries the cache key, and at shutdown logoutCachedToken
+// no-ops on an empty stored token (Drain still returns the entry; only the logout
+// is skipped), so this caller-owned API token is never logged out from under its
+// owner. Do not "simplify" by storing the token itself: that would make shutdown
+// try to log out a token we do not own.
+func validateGatewayToken(ctx context.Context, tokenCache *TokenCache, client *centreon.Client, host, token string, logger *slog.Logger) bool {
+	if _, ok := tokenCache.Get(host, "", token); ok {
+		return true
+	}
+	if err := checkCredentials(ctx, client); err != nil {
+		logger.Error("gateway: token validation failed", "host", safeHost(host), "error", redact.Reason(err))
+		return false
+	}
+	tokenCache.Set(host, "", token, "")
+	logger.Debug("gateway: token validated", "host", safeHost(host))
+	return true
 }
 
 // hostAllowed reports whether host may be used in gateway mode. An empty

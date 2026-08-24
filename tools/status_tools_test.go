@@ -99,6 +99,37 @@ func TestPlatformStatusHandlerFn_CombinesResults(t *testing.T) {
 	}
 }
 
+// TestPlatformStatusHandlerFn_NilServersSerializeAsArray pins #85 for the embedded
+// server list: a nil Servers.Result must nest as [] not null in the composite
+// platform_status output, the same guarantee the dedicated list tools give.
+func TestPlatformStatusHandlerFn_NilServersSerializeAsArray(t *testing.T) {
+	fetchHosts := func(_ context.Context) (*centreon.HostStatusCount, error) {
+		return &centreon.HostStatusCount{}, nil
+	}
+	fetchServices := func(_ context.Context) (*centreon.ServiceStatusCount, error) {
+		return &centreon.ServiceStatusCount{}, nil
+	}
+	fetchServers := func(_ context.Context) (*centreon.ListResponse[centreon.MonitoringServer], error) {
+		return &centreon.ListResponse[centreon.MonitoringServer]{Result: nil}, nil
+	}
+
+	handler := platformStatusHandlerFn(fetchHosts, fetchServices, fetchServers, testLogger(t), testStatusHost)
+	res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, struct{}{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error result: %s", textOf(t, res))
+	}
+	text := textOf(t, res)
+	if strings.Contains(text, `"result": null`) {
+		t.Errorf("embedded nil server list must not serialize as null, got: %q", text)
+	}
+	if !strings.Contains(text, `"result": []`) {
+		t.Errorf("embedded nil server list must serialize as an empty array, got: %q", text)
+	}
+}
+
 // TestPlatformStatusHandlerFn_RunsConcurrently proves the three reads run in
 // parallel: each fetcher blocks until every fetcher has started. A sequential
 // implementation can never get all three started at once, so it fails to reach

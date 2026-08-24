@@ -48,14 +48,28 @@ func TestHostAllowed(t *testing.T) {
 	}
 }
 
-// TestGatewayServer_HostAllowlist exercises the enforcement point itself, not
-// just the hostAllowed helper: it confirms gatewayServer rejects a host that is
-// not on the allowlist (returns nil) and admits one that is. A token is
-// supplied so the token branch is taken and no network login is attempted.
+// TestGatewayServer_HostAllowlist exercises the enforcement point itself, not just
+// the hostAllowed helper: gatewayServer must reject a host off the allowlist and a
+// cleartext scheme, and admit an allowed one. Since #79 an accepted host must answer
+// the token-validation read, so the accept cases point at a fake that accepts any
+// token. The reject cases assert on the specific rejection-reason LOG, not only a
+// nil server: deleting the allowlist or scheme check would fall through to token
+// validation, which also returns nil against the unreachable reject host, so a bare
+// nil check could not tell the two rejections apart (or catch either check's
+// removal).
 func TestGatewayServer_HostAllowlist(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
 	cache := NewTokenCache(time.Minute)
 
+	// A fake Centreon that accepts any token, so the accept cases reach a real
+	// (loopback http, hence AllowHTTP) host and clear token validation.
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fake := httptest.NewServer(mux)
+	defer fake.Close()
+
+	discard := slog.New(slog.DiscardHandler)
 	newReq := func(host string) *http.Request {
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
 		r.Header.Set("X-Centreon-Host", host)
@@ -64,39 +78,352 @@ func TestGatewayServer_HostAllowlist(t *testing.T) {
 	}
 
 	t.Run("host not in allowlist is rejected", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
 		cfg := &Config{AllowedHosts: []string{"https://allowed.example.com"}}
-		if srv := gatewayServer(newReq("https://evil.example.com"), cfg, cache, logger, nil); srv != nil {
+		if s := gatewayServer(newReq("https://evil.example.com"), cfg, cache, logger, nil); s != nil {
 			t.Error("expected nil server for host not in allowlist, got non-nil")
+		}
+		if !strings.Contains(buf.String(), "not in allowlist") {
+			t.Errorf("expected the allowlist-rejection log (deleting the allowlist check must be caught here), got: %s", buf.String())
 		}
 	})
 
 	t.Run("host in allowlist is accepted", func(t *testing.T) {
-		cfg := &Config{AllowedHosts: []string{"https://allowed.example.com"}}
-		if srv := gatewayServer(newReq("https://allowed.example.com"), cfg, cache, logger, nil); srv == nil {
+		cfg := &Config{AllowHTTP: true, AllowedHosts: []string{fake.URL}}
+		if s := gatewayServer(newReq(fake.URL), cfg, cache, discard, nil); s == nil {
 			t.Error("expected non-nil server for allowed host, got nil")
 		}
 	})
 
 	t.Run("empty allowlist accepts any host", func(t *testing.T) {
-		cfg := &Config{}
-		if srv := gatewayServer(newReq("https://anything.example.com"), cfg, cache, logger, nil); srv == nil {
+		cfg := &Config{AllowHTTP: true}
+		if s := gatewayServer(newReq(fake.URL), cfg, cache, discard, nil); s == nil {
 			t.Error("expected non-nil server when allowlist is empty, got nil")
 		}
 	})
 
 	t.Run("http host rejected when AllowHTTP is false", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
 		cfg := &Config{}
-		if srv := gatewayServer(newReq("http://plain.example.com"), cfg, cache, logger, nil); srv != nil {
+		if s := gatewayServer(newReq("http://plain.example.com"), cfg, cache, logger, nil); s != nil {
 			t.Error("expected nil server for cleartext http host without CENTREON_ALLOW_HTTP, got non-nil")
+		}
+		if !strings.Contains(buf.String(), "host rejected") {
+			t.Errorf("expected the scheme-rejection log (deleting the scheme check must be caught here), got: %s", buf.String())
 		}
 	})
 
 	t.Run("http host accepted when AllowHTTP is true", func(t *testing.T) {
 		cfg := &Config{AllowHTTP: true}
-		if srv := gatewayServer(newReq("http://plain.example.com"), cfg, cache, logger, nil); srv == nil {
+		if s := gatewayServer(newReq(fake.URL), cfg, cache, discard, nil); s == nil {
 			t.Error("expected non-nil server for http host with CENTREON_ALLOW_HTTP, got nil")
 		}
 	})
+}
+
+// TestGatewayServer_RejectsOversizedHostHeader pins issue #76: gatewayServer must
+// reject an X-Centreon-Host header longer than maxHostHeaderBytes BEFORE it reaches
+// safeHost or any credential handling, and must never log the host content (logging
+// even a "redacted" oversized host is the O(len) redaction cost the cap exists to
+// defend against). Input shapes are varied deliberately (padding location, escape
+// placement, allowlisted vs not) because this file's history shows a single fixed
+// shape lets fail-open bugs survive a sabotage pass.
+func TestGatewayServer_RejectsOversizedHostHeader(t *testing.T) {
+	t.Parallel()
+
+	const marker = "oversized-host-marker-must-not-be-logged"
+
+	newReq := func(host string) *http.Request {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
+		r.Header.Set("X-Centreon-Host", host)
+		r.Header.Set("X-Centreon-Token", "dummy-token")
+		return r
+	}
+
+	tests := []struct {
+		name        string
+		host        string
+		allowlisted bool
+	}{
+		{
+			name: "just over the cap, padding in path, escape at end",
+			host: "https://" + marker + ".example.com/" + strings.Repeat("a", maxHostHeaderBytes) + "%",
+		},
+		{
+			name: "one megabyte, padding in query, escape mid-string",
+			host: "https://" + marker + ".example.com/?q=" + strings.Repeat("b", 512<<10) + "%25" + strings.Repeat("c", 512<<10),
+		},
+		{
+			// The host equals an allowlist entry: without the length gate the flow
+			// would reach hostAllowed (true) and build a server, so this pins that the
+			// cap precedes the allowlist check.
+			name:        "oversized host that is on the allowlist is still rejected",
+			host:        "https://" + marker + ".example.com/" + strings.Repeat("d", maxHostHeaderBytes),
+			allowlisted: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if len(tt.host) <= maxHostHeaderBytes {
+				t.Fatalf("test host is not oversized: len=%d cap=%d", len(tt.host), maxHostHeaderBytes)
+			}
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			cache := NewTokenCache(time.Minute)
+
+			cfg := &Config{}
+			if tt.allowlisted {
+				cfg.AllowedHosts = []string{tt.host}
+			}
+
+			if srv := gatewayServer(newReq(tt.host), cfg, cache, logger, nil); srv != nil {
+				t.Fatal("expected nil server for oversized X-Centreon-Host, got non-nil")
+			}
+			if out := buf.String(); strings.Contains(out, marker) {
+				t.Errorf("oversized host content must not be logged (DoS cost / CWE-532), got: %s", out)
+			}
+		})
+	}
+}
+
+// TestRunHTTP_RejectsOversizedRequestHeaders pins issue #76: runHTTP must set
+// MaxHeaderBytes so the server answers a request whose headers exceed the cap with
+// 431 instead of buffering up to Go's 1 MiB default. The oversize is placed in a
+// single header in one subtest and spread across many in another, since
+// MaxHeaderBytes bounds the TOTAL header size, not one field.
+func TestRunHTTP_RejectsOversizedRequestHeaders(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	port := freePort(t)
+	cfg := &Config{
+		Host:      "https://unused.example.com", // required field; unused in gateway mode
+		Transport: transportHTTP,
+		AuthMode:  authModeGateway,
+		HTTPHost:  "127.0.0.1",
+		HTTPPort:  port,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runHTTP(ctx, cfg, logger, nil) }()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitForHealth(t, base+"/health")
+
+	tests := []struct {
+		name    string
+		setHdrs func(*http.Request)
+	}{
+		{
+			name: "bulk in one X-Centreon-Host header",
+			setHdrs: func(r *http.Request) {
+				r.Header.Set("X-Centreon-Host", strings.Repeat("z", maxHeaderBytes+(8<<10)))
+			},
+		},
+		{
+			name: "bulk spread across many headers",
+			setHdrs: func(r *http.Request) {
+				chunk := strings.Repeat("z", 8<<10)
+				for i := 0; i < (maxHeaderBytes/(8<<10))+2; i++ {
+					r.Header.Set(fmt.Sprintf("X-Junk-%d", i), chunk)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health", http.NoBody)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			tt.setHdrs(req)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+				t.Errorf("expected 431 for oversized headers, got %d", resp.StatusCode)
+			}
+		})
+	}
+
+	// A normal request stays under the cap and still succeeds.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health", http.NoBody)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("normal /health request should return 200, got %d", resp.StatusCode)
+	}
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("runHTTP did not return within 15s after context cancel")
+	}
+}
+
+// TestGatewayServer_HostCapBoundaryIsExclusive pins that the #76 length gate is
+// '>', not '>=': a host of exactly maxHostHeaderBytes must pass the gate. We prove
+// it passed by observing that it reaches the NEXT check (the allowlist) rather than
+// the "header too long" rejection.
+func TestGatewayServer_HostCapBoundaryIsExclusive(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	host := "https://boundary.example.com/"
+	host += strings.Repeat("a", maxHostHeaderBytes-len(host))
+	if len(host) != maxHostHeaderBytes {
+		t.Fatalf("host must be exactly the cap: len=%d cap=%d", len(host), maxHostHeaderBytes)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
+	req.Header.Set("X-Centreon-Host", host)
+	req.Header.Set("X-Centreon-Token", "tok")
+
+	// A non-empty allowlist that does NOT contain the host, so the expected outcome
+	// past the length gate is an allowlist rejection.
+	cfg := &Config{AllowedHosts: []string{"https://a-different-allowed-host.example.com"}}
+	if s := gatewayServer(req, cfg, NewTokenCache(time.Minute), logger, nil); s != nil {
+		t.Fatal("expected nil (rejected by allowlist), got non-nil")
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "too long") {
+		t.Errorf("a host of exactly the cap must NOT trip the length gate, got: %s", out)
+	}
+	if !strings.Contains(out, "not in allowlist") {
+		t.Errorf("a host of exactly the cap should reach the allowlist check, got: %s", out)
+	}
+}
+
+// TestGatewayServer_ValidatesTokenBeforeBuild pins issue #79: a caller-supplied
+// X-Centreon-Token must be validated against Centreon BEFORE gatewayServer builds
+// the (expensive) tool registry, so an unauthenticated caller cannot force a
+// per-request registry build. Inputs are varied (token value, allowlist state) so
+// no single hidden constant carries the test.
+func TestGatewayServer_ValidatesTokenBeforeBuild(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	const goodToken = "valid-tok-3"
+
+	var statusHits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, r *http.Request) {
+		statusHits.Add(1)
+		if r.Header.Get("X-AUTH-TOKEN") != goodToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fake := httptest.NewServer(mux)
+	defer fake.Close()
+
+	newReq := func(token string) *http.Request {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
+		r.Header.Set("X-Centreon-Host", fake.URL)
+		r.Header.Set("X-Centreon-Token", token)
+		return r
+	}
+
+	tests := []struct {
+		name      string
+		token     string
+		allowlist []string
+		wantNil   bool
+	}{
+		{"bad token is rejected before build (empty allowlist)", "wrong-tok", nil, true},
+		{"bad token rejected even when the host is allowlisted", "another-wrong-tok", []string{fake.URL}, true},
+		{"valid token builds a server", goodToken, []string{fake.URL}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statusHits.Store(0)
+			cfg := &Config{AllowHTTP: true, AllowedHosts: tt.allowlist}
+			s := gatewayServer(newReq(tt.token), cfg, NewTokenCache(time.Minute), logger, nil)
+			if tt.wantNil && s != nil {
+				t.Fatal("expected nil server for a token that fails validation, got non-nil")
+			}
+			if !tt.wantNil && s == nil {
+				t.Fatal("expected non-nil server for a valid token, got nil")
+			}
+			if got := statusHits.Load(); got != 1 {
+				t.Errorf("expected exactly one token-validation read against Centreon, got %d", got)
+			}
+		})
+	}
+}
+
+// TestGatewayServer_CachesTokenValidation pins the perf half of the #79 containment:
+// a repeated valid token reuses the cached validation and does NOT re-hit Centreon,
+// while a DISTINCT token validates separately (the token is part of the cache key,
+// guarding the fail-open shape where the cache would match any token).
+func TestGatewayServer_CachesTokenValidation(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	const (
+		tokA = "cache-tok-A"
+		tokB = "cache-tok-B"
+	)
+
+	var statusHits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, r *http.Request) {
+		statusHits.Add(1)
+		if tok := r.Header.Get("X-AUTH-TOKEN"); tok != tokA && tok != tokB {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fake := httptest.NewServer(mux)
+	defer fake.Close()
+
+	cfg := &Config{AllowHTTP: true}
+	cache := NewTokenCache(time.Minute)
+
+	newReq := func(token string) *http.Request {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
+		r.Header.Set("X-Centreon-Host", fake.URL)
+		r.Header.Set("X-Centreon-Token", token)
+		return r
+	}
+
+	// Same token twice: the second request reuses the cached validation.
+	if s := gatewayServer(newReq(tokA), cfg, cache, logger, nil); s == nil {
+		t.Fatal("request 1: expected non-nil server for a valid token")
+	}
+	if s := gatewayServer(newReq(tokA), cfg, cache, logger, nil); s == nil {
+		t.Fatal("request 2: expected non-nil server for a valid token")
+	}
+	if got := statusHits.Load(); got != 1 {
+		t.Fatalf("the same token twice should validate against Centreon exactly once, got %d", got)
+	}
+
+	// A distinct token must not match the cached entry, so it validates separately.
+	if s := gatewayServer(newReq(tokB), cfg, cache, logger, nil); s == nil {
+		t.Fatal("request 3: expected non-nil server for a second valid token")
+	}
+	if got := statusHits.Load(); got != 2 {
+		t.Fatalf("a distinct token must validate separately (token is in the cache key), got %d validations", got)
+	}
 }
 
 // TestGatewayServer_RedactsUserinfoInHostLogs pins issue #41: a gateway host URL

@@ -264,3 +264,38 @@ func TestAnnotations_SubmitAndCheckAreDestructive(t *testing.T) {
 		}
 	}
 }
+
+// TestAnnotations_ForceCheckIsNotIdempotent pins #91 item 1: forcing an on-demand
+// check schedules a fresh check on every call, so centreon_resource_check must NOT
+// advertise IdempotentHint (a client honoring it could auto-retry and trigger
+// repeated checks). centreon_resource_submit overwrites to a fixed state and is
+// genuinely idempotent, so it keeps IdempotentHint.
+func TestAnnotations_ForceCheckIsNotIdempotent(t *testing.T) {
+	ctx := t.Context()
+	cs := registerAllSession(t, ctx, &centreon.Client{}, false)
+
+	wantIdempotent := map[string]bool{"centreon_resource_check": false, "centreon_resource_submit": true}
+	seen := map[string]bool{}
+	for tool, err := range cs.Tools(ctx, nil) {
+		if err != nil {
+			t.Fatalf("listing tools: %v", err)
+		}
+		want, ok := wantIdempotent[tool.Name]
+		if !ok {
+			continue
+		}
+		seen[tool.Name] = true
+		if tool.Annotations == nil {
+			t.Errorf("%s has no annotations", tool.Name)
+			continue
+		}
+		if tool.Annotations.IdempotentHint != want {
+			t.Errorf("%s IdempotentHint = %v, want %v", tool.Name, tool.Annotations.IdempotentHint, want)
+		}
+	}
+	for name := range wantIdempotent {
+		if !seen[name] {
+			t.Errorf("tool %q was not found among registered tools", name)
+		}
+	}
+}
