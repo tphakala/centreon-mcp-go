@@ -122,6 +122,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reachable of the two, since such a host passes startup validation and runs
   normally. It leaked through four paths, including a bracketed-IPv6 carve-out and
   a tail search that both looked for a raw `:` only (CWE-532). (#68, #75)
+- In gateway (multi-tenant HTTP) mode the caller-supplied `X-Centreon-Host` header
+  is now length-capped (2048 bytes) before it reaches host redaction, and the HTTP
+  server caps total request-header size at 64 KiB instead of Go's 1 MiB default.
+  Previously an unauthenticated request could send a ~1 MiB header that reached the
+  credential-redaction path before any authentication check, costing tens of
+  milliseconds and megabytes of allocation per request, an unauthenticated DoS
+  lever. (#76)
+- In gateway mode a caller-supplied `X-Centreon-Token` is now validated against
+  Centreon before the per-request tool registry is built, so an unauthenticated
+  caller can no longer force that build (measured at tens of thousands of
+  allocations per request) with an arbitrary token. A token that fails validation is
+  now rejected when the connection is established rather than surfacing later on the
+  first tool call, and successful validations are cached for the token cache's
+  lifetime so a repeat caller pays no extra round-trip. The per-request registry
+  rebuild for already-valid callers is tracked as a separate performance
+  follow-up. (#79)
 
 ### Changed
 
