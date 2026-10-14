@@ -1986,9 +1986,9 @@ func TestMCPHandler_SessionServerReturnsNilForNonCreatingRequests(t *testing.T) 
 	t.Run("without a memo every call builds", testSessionServerWithoutMemoBuildsEachCall)
 }
 
-// startGatewayRunHTTP starts runHTTP in gateway mode against fakeURL's host
-// (AllowHTTP, loopback) and returns the base URL. Shutdown is registered as a
-// cleanup and waits for runHTTP to return.
+// startGatewayRunHTTP starts runHTTP in gateway mode on a free loopback port
+// (AllowHTTP, so the fake Centreon may be http) and returns the base URL.
+// Shutdown is registered as a cleanup and waits for runHTTP to return.
 func startGatewayRunHTTP(t *testing.T, logger *slog.Logger) string {
 	t.Helper()
 	port := freePort(t)
