@@ -1827,9 +1827,10 @@ func scenarioTwoSessionsInterleaved(t *testing.T, url string, _ *mcp.Server) {
 func scenarioGetDeleteOnSession(t *testing.T, url string, _ *mcp.Server) {
 	t.Helper()
 	sid := initSession(t, url)
-	// The standalone SSE stream stays open, so read only until the headers
-	// arrive (or the short deadline passes) and drop it.
-	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	// The standalone SSE stream stays open, so read only the response headers
+	// and then drop it. Requiring a 200 proves the GET reached the handler; the
+	// generous deadline is only a hang guard, not an assertion.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
@@ -1838,9 +1839,14 @@ func scenarioGetDeleteOnSession(t *testing.T, url string, _ *mcp.Server) {
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Mcp-Session-Id", sid)
 	req.Header.Set("Mcp-Protocol-Version", testSessionVersion)
-	if resp, err := http.DefaultClient.Do(req); err == nil {
-		_ = resp.Body.Close()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET standalone stream: %v", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET standalone stream: status %d, want 200", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
 	cancel()
 	if r := rawMCP(t, http.MethodDelete, url, sid, "", nil); r.status != http.StatusNoContent && r.status != http.StatusOK {
 		t.Fatalf("DELETE: status %d, body %q", r.status, r.body)
@@ -1870,7 +1876,7 @@ func TestMCPHandler_BuildsServerOncePerSession(t *testing.T) {
 		{"initialize only", scenarioInitializeOnly, 1},
 		{"full session serves the complete tool set", scenarioFullSession, 1},
 		{"two sessions interleaved build twice", scenarioTwoSessionsInterleaved, 2},
-		{"GET and DELETE on a session build nothing", scenarioGetDeleteOnSession, 1},
+		{"GET and DELETE on a session add no build", scenarioGetDeleteOnSession, 1},
 		{"unknown session id builds nothing", scenarioUnknownSessionID, 0},
 	}
 	for _, tt := range tests {
