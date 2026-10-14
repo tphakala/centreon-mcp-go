@@ -15,7 +15,7 @@ Exposes 91 tools covering real-time monitoring, host and service configuration, 
 
 ## Requirements
 
-- Go 1.26 or later
+- Go 1.27 or later
 - A Centreon instance with REST API v2 access
 - API credentials (username/password or API token)
 
