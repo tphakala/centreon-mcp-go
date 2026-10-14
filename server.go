@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -60,6 +61,10 @@ const (
 	// handler runs, so an unauthenticated caller cannot make the server buffer up to
 	// a megabyte per request (issue #76).
 	maxHeaderBytes = 64 << 10
+	// maxRequestBodyBytes caps an MCP request body below the SDK's 4 MiB
+	// mcp.DefaultMaxRequestBodyBytes. Tool inputs are small JSON, so 1 MiB is
+	// generous; a larger body gets a 413.
+	maxRequestBodyBytes = 1 << 20
 
 	// maxRedirects caps a redirect chain, matching net/http's default policy that
 	// noCrossHostRedirect replaces: installing a custom CheckRedirect removes the
@@ -353,9 +358,7 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger, httpClient *
 		return gatewayServer(r, cfg, tokenCache, logger, httpClient)
 	}
 
-	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
-		Logger: logger,
-	})
+	mcpHandler := newMCPHandler(getServer, logger)
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcpHandler)
@@ -440,7 +443,74 @@ func gracefulShutdown(serveCtx context.Context, httpServer *http.Server, sharedC
 	}
 }
 
-// gatewayServer creates a per-request MCP server from gateway headers.
+// serverMemoKey is the request-context key under which newMCPHandler stores a
+// request's *serverMemo.
+type serverMemoKey struct{}
+
+// serverMemo holds the result of the one build a request may trigger, including
+// a nil result, so a failed gateway authentication is attempted once per request.
+type serverMemo struct {
+	once sync.Once
+	srv  *mcp.Server
+}
+
+// withServerMemo returns r with a fresh serverMemo attached for sessionServer.
+func withServerMemo(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), serverMemoKey{}, &serverMemo{}))
+}
+
+// sessionServer adapts build (which creates a tool-bearing server and, in gateway
+// mode, authenticates against Centreon) to the getServer callback of
+// mcp.NewStreamableHTTPHandler so that build runs once per created session.
+//
+// go-sdk v1.8.0 calls getServer on every HTTP request to read the server's
+// protocol versions (mcp/streamable.go:349) and again to create a session
+// (mcp/streamable.go:648); v1.7.0 called it only at session creation. Left
+// alone, every request would build a full tool registry and a failed gateway
+// login would reach Centreon twice. So:
+//   - Only a POST without Mcp-Session-Id gets a server. That mirrors
+//     serveStatefulPOST creating a session only when the header is empty
+//     (streamable.go:633-648), and assumes a stateful handler (we never set
+//     StreamableHTTPOptions.Stateless; TestMCPHandler_Rejects2026ProtocolOnStatefulHandler
+//     pins that). Any other request gets nil, which at streamable.go:349-353 makes
+//     the SDK use its default protocol versions. Those equal ours only while
+//     buildServer leaves ServerOptions.SupportedProtocolVersions empty; set it and
+//     this function must change with it.
+//   - For a creating request the version probe and the session creation share one
+//     build through the serverMemo that newMCPHandler attaches to the request
+//     context; the SDK passes the same context on (streamable.go:358).
+//
+// A request the SDK later rejects (wrong Content-Type, for example) can still
+// run build once, because the probe at streamable.go:349 precedes those checks.
+func sessionServer(build func(*http.Request) *mcp.Server) func(*http.Request) *mcp.Server {
+	return func(r *http.Request) *mcp.Server {
+		if r.Method != http.MethodPost || r.Header.Get("Mcp-Session-Id") != "" {
+			return nil
+		}
+		memo, ok := r.Context().Value(serverMemoKey{}).(*serverMemo)
+		if !ok {
+			return build(r)
+		}
+		memo.once.Do(func() { memo.srv = build(r) })
+		return memo.srv
+	}
+}
+
+// newMCPHandler serves the MCP streamable-HTTP endpoint, building a server per
+// created session through build (see sessionServer) and capping request bodies at
+// maxRequestBodyBytes.
+func newMCPHandler(build func(*http.Request) *mcp.Server, logger *slog.Logger) http.Handler {
+	h := mcp.NewStreamableHTTPHandler(sessionServer(build), &mcp.StreamableHTTPOptions{
+		Logger:              logger,
+		MaxRequestBodyBytes: maxRequestBodyBytes,
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, withServerMemo(r))
+	})
+}
+
+// gatewayServer creates an MCP server from gateway headers. It runs once per
+// session-creating request (see sessionServer), authenticating the caller.
 func gatewayServer(r *http.Request, cfg *Config, tokenCache *TokenCache, logger *slog.Logger, httpClient *http.Client) *mcp.Server {
 	host := r.Header.Get("X-Centreon-Host")
 	username := r.Header.Get("X-Centreon-Username")
