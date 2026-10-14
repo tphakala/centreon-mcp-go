@@ -110,6 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plain-text HTTP 400.
 - `github.com/tphakala/centreon-go-client/v2` is updated to v2.2.0, which
   requires Go 1.27.
+- `golang.org/x/sync` is updated to v0.24.0, along with the indirect
+  `golang.org/x/oauth2`, `x/sys`, `x/time` and `x/tools` modules.
 
 ### Security
 
