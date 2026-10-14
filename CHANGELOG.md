@@ -103,9 +103,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not idempotent; a client honoring the hint could otherwise auto-retry and trigger
   repeated checks. `centreon_resource_submit`, which overwrites to a fixed state,
   keeps `idempotentHint`. (#91)
+- The MCP Go SDK (`github.com/modelcontextprotocol/go-sdk`) is updated to
+  v1.8.0. A client that speaks MCP protocol 2026-07-28 to this server (which
+  serves stateful sessions) now receives JSON-RPC error -32022 listing the
+  protocol versions the server does accept, so it can fall back, instead of a
+  plain-text HTTP 400.
+- `github.com/tphakala/centreon-go-client/v2` is updated to v2.2.0, which
+  requires Go 1.27.
 
 ### Security
 
+- In gateway mode a failed password login or token check now reaches Centreon
+  once per request. SDK v1.8.0 asks for the per-session server on every HTTP
+  request, which would have run the credential check twice per `initialize` (two
+  failed logins toward an account lockout) and rebuilt the tool registry on every
+  request; the server is now built once per created session, as before.
+- HTTP request bodies to `/mcp` are capped at 1 MiB (the SDK default is 4 MiB);
+  a larger body gets HTTP 413.
 - Free text that Centreon returns to the model (plugin and check output, host and
   service names and aliases, notes, acknowledgement and downtime comments, and
   custom macro values) is now wrapped in an untrusted-data fence in every read

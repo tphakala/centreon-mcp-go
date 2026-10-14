@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1638,5 +1640,620 @@ func TestRunHTTP_GatewayModeSkipsStartupPreflight(t *testing.T) {
 	}
 	if got := logins.Load(); got != 0 {
 		t.Errorf("gateway mode should not hit login endpoint on startup, got %d logins", got)
+	}
+}
+
+// --- go-sdk 1.8.0 bump: per-session server build, body cap, stateful rejection ---
+
+const (
+	testInitializeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`
+	testInitializedMsg = `{"jsonrpc":"2.0","method":"notifications/initialized"}`
+	testToolsListBody  = `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`
+	testToolsCallBody  = `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"centreon_connection_test","arguments":{}}}`
+	testSessionVersion = "2025-06-18"
+)
+
+// rawResp is the status, headers, and body of one raw MCP HTTP exchange.
+type rawResp struct {
+	status int
+	header http.Header
+	body   string
+}
+
+// rawMCP sends one request to an MCP endpoint with the headers the streamable
+// handler requires (Content-Type, Accept), plus Mcp-Session-Id and
+// Mcp-Protocol-Version when sessionID is set. extra headers override the
+// defaults. The client times out so a stuck stream cannot hang the test.
+func rawMCP(t *testing.T, method, url, sessionID, body string, extra map[string]string) rawResp {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build %s request: %v", method, err)
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+	}
+	if sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", sessionID)
+		req.Header.Set("Mcp-Protocol-Version", testSessionVersion)
+	}
+	for k, v := range extra {
+		req.Header.Set(k, v)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read %s response: %v", method, err)
+	}
+	return rawResp{status: resp.StatusCode, header: resp.Header, body: string(b)}
+}
+
+// rpcPayload extracts the JSON-RPC message from a response body that is either
+// plain JSON or a single server-sent event.
+func rpcPayload(t *testing.T, body string) map[string]any {
+	t.Helper()
+	payload := strings.TrimSpace(body)
+	for line := range strings.SplitSeq(body, "\n") {
+		if rest, ok := strings.CutPrefix(line, "data:"); ok {
+			payload = strings.TrimSpace(rest)
+			break
+		}
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(payload), &m); err != nil {
+		t.Fatalf("decode JSON-RPC payload %q: %v", body, err)
+	}
+	return m
+}
+
+// initSession performs a raw initialize and returns the new session id.
+func initSession(t *testing.T, url string) string {
+	t.Helper()
+	r := rawMCP(t, http.MethodPost, url, "", testInitializeBody, nil)
+	if r.status != http.StatusOK {
+		t.Fatalf("initialize: status %d, body %q", r.status, r.body)
+	}
+	id := r.header.Get("Mcp-Session-Id")
+	if id == "" {
+		t.Fatal("initialize returned no Mcp-Session-Id")
+	}
+	return id
+}
+
+// inMemoryToolCount returns how many tools s lists over an in-memory session.
+func inMemoryToolCount(t *testing.T, s *mcp.Server) int {
+	t.Helper()
+	ctx := t.Context()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	ss, err := s.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	t.Cleanup(func() { _ = ss.Close() })
+	c := mcp.NewClient(&mcp.Implementation{Name: "count-test", Version: "0"}, nil)
+	cs, err := c.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	return len(res.Tools)
+}
+
+// newCountingMCPServer serves newMCPHandler over httptest with a build function
+// that returns a real tool-bearing server and counts its calls. The Centreon
+// behind it is a local fake answering the status route, so tool calls never leave
+// the machine. It returns the /mcp URL, the build counter, and a reference server
+// built the same way for tool-count comparisons.
+func newCountingMCPServer(t *testing.T) (string, *atomic.Int32, *mcp.Server) {
+	t.Helper()
+	logger := slog.New(slog.DiscardHandler)
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fake := httptest.NewServer(fakeMux)
+	t.Cleanup(fake.Close)
+	client, err := newCentreonClient(fake.URL, &Config{Token: "t"}, nil, nil)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	var builds atomic.Int32
+	build := func(*http.Request) *mcp.Server {
+		builds.Add(1)
+		return buildServer(client, logger, "http://centreon.test", false)
+	}
+	srv := httptest.NewServer(newMCPHandler(build, logger))
+	t.Cleanup(srv.Close)
+	return srv.URL, &builds, buildServer(client, logger, "http://centreon.test", false)
+}
+
+// sessionScenario drives one request sequence against the /mcp URL; ref is a
+// server built the same way as the handler's, for tool-count comparisons.
+type sessionScenario func(t *testing.T, url string, ref *mcp.Server)
+
+func scenarioInitializeOnly(t *testing.T, url string, _ *mcp.Server) {
+	t.Helper()
+	initSession(t, url)
+}
+
+// scenarioFullSession runs initialize, notifications/initialized, tools/list and
+// tools/call on one session, checking the list is the complete tool set and the
+// call is served, so a handler that returned nil everywhere would not pass.
+func scenarioFullSession(t *testing.T, url string, ref *mcp.Server) {
+	t.Helper()
+	sid := initSession(t, url)
+	if r := rawMCP(t, http.MethodPost, url, sid, testInitializedMsg, nil); r.status != http.StatusAccepted {
+		t.Fatalf("notifications/initialized: status %d, body %q", r.status, r.body)
+	}
+	r := rawMCP(t, http.MethodPost, url, sid, testToolsListBody, nil)
+	if r.status != http.StatusOK {
+		t.Fatalf("tools/list: status %d, body %q", r.status, r.body)
+	}
+	result, _ := rpcPayload(t, r.body)["result"].(map[string]any)
+	tools, _ := result["tools"].([]any)
+	want := inMemoryToolCount(t, ref)
+	if want == 0 || len(tools) != want {
+		t.Fatalf("tools/list returned %d tools, a directly built server lists %d", len(tools), want)
+	}
+	r = rawMCP(t, http.MethodPost, url, sid, testToolsCallBody, nil)
+	if r.status != http.StatusOK || !strings.Contains(r.body, "Connection successful") {
+		t.Fatalf("tools/call: status %d, body %q", r.status, r.body)
+	}
+}
+
+func scenarioTwoSessionsInterleaved(t *testing.T, url string, _ *mcp.Server) {
+	t.Helper()
+	a := initSession(t, url)
+	b := initSession(t, url)
+	for _, sid := range []string{a, b, a, b} {
+		if r := rawMCP(t, http.MethodPost, url, sid, testToolsListBody, nil); r.status != http.StatusOK {
+			t.Fatalf("tools/list on %s: status %d, body %q", sid, r.status, r.body)
+		}
+	}
+}
+
+// scenarioGetDeleteOnSession opens and drops the standalone SSE stream, deletes
+// the session, then POSTs to the deleted session.
+func scenarioGetDeleteOnSession(t *testing.T, url string, _ *mcp.Server) {
+	t.Helper()
+	sid := initSession(t, url)
+	// The standalone SSE stream stays open, so read only the response headers
+	// and then drop it. Requiring a 200 proves the GET reached the handler; the
+	// generous deadline is only a hang guard, not an assertion.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET: %v", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Mcp-Session-Id", sid)
+	req.Header.Set("Mcp-Protocol-Version", testSessionVersion)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET standalone stream: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET standalone stream: status %d, want 200", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+	cancel()
+	if r := rawMCP(t, http.MethodDelete, url, sid, "", nil); r.status != http.StatusNoContent && r.status != http.StatusOK {
+		t.Fatalf("DELETE: status %d, body %q", r.status, r.body)
+	}
+	if r := rawMCP(t, http.MethodPost, url, sid, testToolsListBody, nil); r.status != http.StatusNotFound {
+		t.Fatalf("POST on a deleted session: status %d, want 404 (body %q)", r.status, r.body)
+	}
+}
+
+func scenarioUnknownSessionID(t *testing.T, url string, _ *mcp.Server) {
+	t.Helper()
+	if r := rawMCP(t, http.MethodPost, url, "does-not-exist", testToolsListBody, nil); r.status != http.StatusNotFound {
+		t.Fatalf("POST with unknown session id: status %d, want 404 (body %q)", r.status, r.body)
+	}
+}
+
+// TestMCPHandler_BuildsServerOncePerSession pins that the tool registry is built
+// once per MCP session, not once per HTTP request: go-sdk v1.8.0 calls getServer
+// on every request (mcp/streamable.go:349) and again to create a session
+// (:648), and newMCPHandler must keep that to one build per created session.
+func TestMCPHandler_BuildsServerOncePerSession(t *testing.T) {
+	tests := []struct {
+		name       string
+		run        sessionScenario
+		wantBuilds int32
+	}{
+		{"initialize only", scenarioInitializeOnly, 1},
+		{"full session serves the complete tool set", scenarioFullSession, 1},
+		{"two sessions interleaved build twice", scenarioTwoSessionsInterleaved, 2},
+		{"GET and DELETE on a session add no build", scenarioGetDeleteOnSession, 1},
+		{"unknown session id builds nothing", scenarioUnknownSessionID, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			url, builds, ref := newCountingMCPServer(t)
+			tt.run(t, url, ref)
+			if got := builds.Load(); got != tt.wantBuilds {
+				t.Errorf("builds = %d, want %d", got, tt.wantBuilds)
+			}
+		})
+	}
+}
+
+// memoRequest returns a request carrying a fresh per-request memo, as
+// newMCPHandler attaches one to every incoming request.
+func memoRequest(t *testing.T, method, sessionID string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequestWithContext(t.Context(), method, "/mcp", http.NoBody)
+	if sessionID != "" {
+		r.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	return withServerMemo(r)
+}
+
+func testSessionServerNonCreatingNeverBuild(t *testing.T) {
+	t.Helper()
+	for _, tt := range []struct{ method, sid string }{
+		{http.MethodGet, "s1"},
+		{http.MethodGet, ""},
+		{http.MethodDelete, "s1"},
+		{http.MethodPost, "s1"},
+	} {
+		var calls int
+		get := sessionServer(func(*http.Request) *mcp.Server {
+			calls++
+			return mcp.NewServer(&mcp.Implementation{Name: "x", Version: "0"}, nil)
+		})
+		if got := get(memoRequest(t, tt.method, tt.sid)); got != nil {
+			t.Errorf("%s with session %q: got a server, want nil", tt.method, tt.sid)
+		}
+		if calls != 0 {
+			t.Errorf("%s with session %q: build called %d times, want 0", tt.method, tt.sid, calls)
+		}
+	}
+}
+
+func testSessionServerCreatingBuildsOnce(t *testing.T) {
+	t.Helper()
+	var calls int
+	srv := mcp.NewServer(&mcp.Implementation{Name: "x", Version: "0"}, nil)
+	get := sessionServer(func(*http.Request) *mcp.Server { calls++; return srv })
+	r := memoRequest(t, http.MethodPost, "")
+	first := get(r)
+	second := get(r)
+	if first != srv || second != srv {
+		t.Fatalf("got %p and %p, want both %p", first, second, srv)
+	}
+	if calls != 1 {
+		t.Errorf("build called %d times, want 1", calls)
+	}
+}
+
+func testSessionServerMemoizesNil(t *testing.T) {
+	t.Helper()
+	var calls int
+	get := sessionServer(func(*http.Request) *mcp.Server { calls++; return nil })
+	r := memoRequest(t, http.MethodPost, "")
+	first := get(r)
+	second := get(r)
+	if first != nil || second != nil {
+		t.Error("want nil on both calls")
+	}
+	if calls != 1 {
+		t.Errorf("build called %d times, want 1", calls)
+	}
+}
+
+func testSessionServerSeparateRequestsSeparateMemo(t *testing.T) {
+	t.Helper()
+	var calls int
+	get := sessionServer(func(*http.Request) *mcp.Server { calls++; return nil })
+	get(memoRequest(t, http.MethodPost, ""))
+	get(memoRequest(t, http.MethodPost, ""))
+	if calls != 2 {
+		t.Errorf("build called %d times across two requests, want 2", calls)
+	}
+}
+
+// testSessionServerWithoutMemoBuildsEachCall pins the fallback for a request that
+// did not pass through newMCPHandler: with no memo to share, each call builds.
+func testSessionServerWithoutMemoBuildsEachCall(t *testing.T) {
+	t.Helper()
+	var calls int
+	get := sessionServer(func(*http.Request) *mcp.Server { calls++; return nil })
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", http.NoBody)
+	get(r)
+	get(r)
+	if calls != 2 {
+		t.Errorf("build called %d times without a memo, want 2", calls)
+	}
+}
+
+// TestMCPHandler_SessionServerReturnsNilForNonCreatingRequests pins the
+// sessionServer predicate: only a POST without Mcp-Session-Id can create a
+// session, so every other request gets nil without running the (expensive,
+// credential-checking) build; and within one request the build runs at most once,
+// including when it returns nil (a failed login must not be retried).
+func TestMCPHandler_SessionServerReturnsNilForNonCreatingRequests(t *testing.T) {
+	t.Run("non-creating requests never build", testSessionServerNonCreatingNeverBuild)
+	t.Run("creating request builds once and repeats the same server", testSessionServerCreatingBuildsOnce)
+	t.Run("a nil build result is memoized too", testSessionServerMemoizesNil)
+	t.Run("separate requests do not share a memo", testSessionServerSeparateRequestsSeparateMemo)
+	t.Run("without a memo every call builds", testSessionServerWithoutMemoBuildsEachCall)
+}
+
+// startGatewayRunHTTP starts runHTTP in gateway mode on a free loopback port
+// (AllowHTTP, so the fake Centreon may be http) and returns the base URL.
+// Shutdown is registered as a cleanup and waits for runHTTP to return.
+func startGatewayRunHTTP(t *testing.T, logger *slog.Logger) string {
+	t.Helper()
+	port := freePort(t)
+	cfg := &Config{
+		Host:      "http://unused.invalid", // required field; unused in gateway mode
+		Transport: transportHTTP,
+		AuthMode:  authModeGateway,
+		HTTPHost:  "127.0.0.1",
+		HTTPPort:  port,
+		AllowHTTP: true,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	errCh := make(chan error, 1)
+	go func() { errCh <- runHTTP(ctx, cfg, logger, nil) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(15 * time.Second):
+			t.Error("runHTTP did not return within 15s after context cancel")
+		}
+	})
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitForHealth(t, base+"/health")
+	return base
+}
+
+// TestRunHTTP_GatewayFailedLoginHitsCentreonOnce pins that a gateway request whose
+// credentials Centreon rejects costs exactly one upstream attempt. go-sdk v1.8.0
+// asks for the server twice per session-creating request (mcp/streamable.go:349
+// and :648), so without the per-request memo a wrong password would count twice
+// toward an account lockout.
+func TestRunHTTP_GatewayFailedLoginHitsCentreonOnce(t *testing.T) {
+	var logins, statusHits atomic.Int32
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("POST /centreon/api/latest/login", func(w http.ResponseWriter, _ *http.Request) {
+		logins.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		statusHits.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	base := startGatewayRunHTTP(t, slog.New(slog.DiscardHandler))
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		counter *atomic.Int32
+	}{
+		{
+			name:    "bad password",
+			headers: map[string]string{"X-Centreon-Host": fake.URL, "X-Centreon-Username": "admin", "X-Centreon-Password": "wrong"},
+			counter: &logins,
+		},
+		{
+			name:    "bad token",
+			headers: map[string]string{"X-Centreon-Host": fake.URL, "X-Centreon-Token": "bad"},
+			counter: &statusHits,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := rawMCP(t, http.MethodPost, base+"/mcp", "", testInitializeBody, tt.headers)
+			if r.status != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400 (body %q)", r.status, r.body)
+			}
+			if got := tt.counter.Load(); got != 1 {
+				t.Errorf("upstream attempts = %d, want exactly 1", got)
+			}
+		})
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent slog writes and test reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// headerRoundTripper adds fixed headers to every outgoing request and counts the
+// POSTs that carry no Mcp-Session-Id, the only requests that can create a session.
+type headerRoundTripper struct {
+	headers  map[string]string
+	creating *atomic.Int32
+}
+
+func (h headerRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	if r.Method == http.MethodPost && r.Header.Get("Mcp-Session-Id") == "" {
+		h.creating.Add(1)
+	}
+	for k, v := range h.headers {
+		r.Header.Set(k, v)
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// TestRunHTTP_GatewaySessionBuildsOnce drives a real MCP client through the
+// gateway (connect, tools/list, tools/call) and pins that the per-session Centreon
+// client and tool registry are created once per session-creating POST, not once
+// per HTTP request, while the tool call is still served by the session. The
+// go-sdk v1.8.0 client opens with a server/discover POST (mcp/client.go:429) before
+// the legacy initialize, so the test counts the session-creating POSTs the client
+// actually sent instead of assuming one.
+func TestRunHTTP_GatewaySessionBuildsOnce(t *testing.T) {
+	var logins atomic.Int32
+	fakeMux := http.NewServeMux()
+	fakeMux.HandleFunc("POST /centreon/api/latest/login", func(w http.ResponseWriter, _ *http.Request) {
+		n := logins.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"security": map[string]any{"token": fmt.Sprintf("tok-%d", n)}})
+	})
+	fakeMux.HandleFunc("GET /centreon/api/latest/logout", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	fakeMux.HandleFunc("GET /centreon/api/latest/monitoring/hosts/status", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	fake := httptest.NewServer(fakeMux)
+	defer fake.Close()
+
+	var logs syncBuffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	base := startGatewayRunHTTP(t, logger)
+
+	var creating atomic.Int32
+	httpClient := &http.Client{Transport: headerRoundTripper{creating: &creating, headers: map[string]string{
+		"X-Centreon-Host":     fake.URL,
+		"X-Centreon-Username": "admin",
+		"X-Centreon-Password": "secret",
+	}}}
+	c := mcp.NewClient(&mcp.Implementation{Name: "build-once-test", Version: "0"}, nil)
+	// DisableStandaloneSSE: the persistent server-initiated stream would block
+	// graceful shutdown (see TestRunHTTP_EnvToolResponseReportsRedactedHost).
+	cs, err := c.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: base + "/mcp", HTTPClient: httpClient, DisableStandaloneSSE: true}, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+
+	tl, err := cs.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	if len(tl.Tools) == 0 {
+		t.Fatal("tools/list returned no tools")
+	}
+	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "centreon_connection_test"})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if res.IsError || !strings.Contains(callToolText(t, res), "Connection successful") {
+		t.Fatalf("tool call should succeed, got error=%v text=%q", res.IsError, callToolText(t, res))
+	}
+
+	if got := logins.Load(); got != 1 {
+		t.Errorf("logins = %d, want 1", got)
+	}
+	// Requests after connect (tools/list, tools/call, ...) carry a session id, so
+	// they must not have built anything. Count builds against session-creating POSTs.
+	if creating.Load() == 0 {
+		t.Fatal("client sent no session-creating POST")
+	}
+	if got, want := strings.Count(logs.String(), "gateway: created per-request client"), int(creating.Load()); got != want {
+		t.Errorf("per-session client created %d times for %d session-creating POSTs; log:\n%s", got, want, logs.String())
+	}
+}
+
+// TestMCPHandler_RejectsOversizedBody pins the explicit request-body cap: a POST
+// body over maxRequestBodyBytes gets 413, one exactly at the cap does not. The
+// padding sits inside a JSON string so the at-limit body is a valid message.
+func TestMCPHandler_RejectsOversizedBody(t *testing.T) {
+	url, _, _ := newCountingMCPServer(t)
+
+	// padded returns a JSON-RPC message of exactly size bytes.
+	padded := func(size int) string {
+		const head = `{"jsonrpc":"2.0","method":"notifications/x","params":{"pad":"`
+		const tail = `"}}`
+		return head + strings.Repeat("a", size-len(head)-len(tail)) + tail
+	}
+	paddedInit := func(size int) string {
+		const head = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"`
+		const tail = `","version":"1"}}}`
+		return head + strings.Repeat("a", size-len(head)-len(tail)) + tail
+	}
+
+	t.Run("new session: one byte over the cap", func(t *testing.T) {
+		r := rawMCP(t, http.MethodPost, url, "", paddedInit(maxRequestBodyBytes+1), nil)
+		if r.status != http.StatusRequestEntityTooLarge {
+			t.Errorf("status = %d, want 413", r.status)
+		}
+	})
+	t.Run("new session: exactly at the cap", func(t *testing.T) {
+		r := rawMCP(t, http.MethodPost, url, "", paddedInit(maxRequestBodyBytes), nil)
+		if r.status != http.StatusOK {
+			t.Errorf("status = %d, want 200 (body %.200q)", r.status, r.body)
+		}
+	})
+	t.Run("existing session: one byte over the cap", func(t *testing.T) {
+		sid := initSession(t, url)
+		r := rawMCP(t, http.MethodPost, url, sid, padded(maxRequestBodyBytes+1), nil)
+		if r.status != http.StatusRequestEntityTooLarge {
+			t.Errorf("status = %d, want 413", r.status)
+		}
+	})
+}
+
+// TestMCPHandler_Rejects2026ProtocolOnStatefulHandler pins the client-visible
+// change of go-sdk 1.8.0: a request that claims protocol 2026-07-28 reaches our
+// stateful handler and is rejected with JSON-RPC error -32022 listing the legacy
+// versions it does accept (go-sdk v1.8.0 mcp/streamable.go:1523-1554), instead of
+// a plain-text 400. It also pins that the handler stays stateful, which
+// sessionServer's creation predicate assumes.
+func TestMCPHandler_Rejects2026ProtocolOnStatefulHandler(t *testing.T) {
+	url, _, _ := newCountingMCPServer(t)
+
+	const requested = "2026-07-28"
+	body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{%q:%q}}}`, mcp.MetaKeyProtocolVersion, requested)
+	r := rawMCP(t, http.MethodPost, url, "", body, map[string]string{"Mcp-Protocol-Version": requested})
+	if r.status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %q)", r.status, r.body)
+	}
+	var env struct {
+		Error struct {
+			Code int `json:"code"`
+			Data struct {
+				Supported []string `json:"supported"`
+				Requested string   `json:"requested"`
+			} `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(r.body), &env); err != nil {
+		t.Fatalf("body is not a JSON-RPC error: %v (body %q)", err, r.body)
+	}
+	if env.Error.Code != mcp.CodeUnsupportedProtocolVersion {
+		t.Errorf("error code = %d, want %d", env.Error.Code, mcp.CodeUnsupportedProtocolVersion)
+	}
+	if len(env.Error.Data.Supported) == 0 {
+		t.Error("data.supported is empty, a client needs the legacy list to fall back")
+	}
+	if slices.Contains(env.Error.Data.Supported, requested) {
+		t.Errorf("data.supported %v must not include the rejected %s", env.Error.Data.Supported, requested)
+	}
+	if env.Error.Data.Requested != requested {
+		t.Errorf("data.requested = %q, want %q", env.Error.Data.Requested, requested)
 	}
 }
