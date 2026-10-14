@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Building now requires Go 1.27. The Docker builder image is `golang:1.27-alpine`,
   CI and release builds use the newest 1.27 patch release, and golangci-lint is
-  pinned to v2.14.0, the first release that supports Go 1.27.
+  pinned to v2.14.0, which supports Go 1.27.
 - Token-based authentication now performs a startup validation check (GET
   `/monitoring/hosts/status`) during server boot in stdio and HTTP env-auth
   modes, failing fast on a bad or expired token. Like password-mode's existing
