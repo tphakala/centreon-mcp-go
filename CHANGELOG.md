@@ -108,6 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serves stateful sessions) now receives JSON-RPC error -32022 listing the
   protocol versions the server does accept, so it can fall back, instead of a
   plain-text HTTP 400.
+- `github.com/tphakala/centreon-go-client/v2` is updated to v2.2.0, which
+  requires Go 1.27.
 
 ### Security
 

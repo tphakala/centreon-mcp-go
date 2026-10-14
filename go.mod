@@ -5,7 +5,7 @@ go 1.27
 require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/quasilyte/go-ruleguard/dsl v0.3.23
-	github.com/tphakala/centreon-go-client/v2 v2.1.0
+	github.com/tphakala/centreon-go-client/v2 v2.2.0
 	golang.org/x/sync v0.22.0
 )
 
